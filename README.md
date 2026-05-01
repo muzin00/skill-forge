@@ -10,7 +10,7 @@ See [Issue #1](https://github.com/muzin00/skill-forge/issues/1) for requirements
 ## Architecture Overview
 
 skill-forge generates skills via AI and executes them in a sandboxed runtime.
-Detailed architecture is being validated through PoCs (tracked under `poc/*` branches).
+Detailed architecture is being validated through PoCs.
 
 ## License
 
