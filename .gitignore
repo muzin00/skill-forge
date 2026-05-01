@@ -1,0 +1,11 @@
+/target/
+**/*.rs.bk
+
+.vscode/
+.idea/
+*.swp
+
+.DS_Store
+
+.env
+.env.local
