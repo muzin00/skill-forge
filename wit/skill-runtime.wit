@@ -1,0 +1,37 @@
+package skill-forge:runtime;
+
+interface types {
+  record skill-error {
+    code: error-code,
+    message: string,
+    stack: option<string>,
+  }
+
+  enum error-code {
+    type-error,
+    runtime-error,
+    capability-denied,
+    network-error,
+    fs-error,
+    user-error,
+    schema-extract-error,
+  }
+
+  record schemas {
+    inputs: string,
+    output: string,
+  }
+}
+
+interface skill-loader-host {
+  get-source: func() -> string;
+}
+
+world skill-runtime {
+  use types.{skill-error, schemas};
+
+  import skill-loader-host;
+
+  export run: func(args-json: string) -> result<string, skill-error>;
+  export extract-schemas: func() -> result<schemas, skill-error>;
+}

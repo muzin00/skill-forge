@@ -1,6 +1,9 @@
 /target/
 **/*.rs.bk
 
+runtime/node_modules/
+runtime/dist/
+
 .vscode/
 .idea/
 *.swp
