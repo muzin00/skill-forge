@@ -9,7 +9,7 @@
 AI エージェントは必要に応じて以下を参照する。
 
 - [README.md](./README.md) — プロジェクト概要、現在のステータス、アーキテクチャ概略
-- [CONTRIBUTING.md](./CONTRIBUTING.md) — ブランチ運用などリポジトリの運用ルールの正本
+- @CONTRIBUTING.md — ブランチ運用などリポジトリの運用ルールの正本
 - [GitHub Issues 一覧](https://github.com/muzin00/skill-forge/issues) — 要件・設計・PoC・タスクの正本。個別 Issue はここから検索して参照する
 
 > 運用手順のうちブランチ運用は CONTRIBUTING.md に整備済み。Issue・PR 運用 / コミット規約 等およびコード規約の正本ドキュメントは現時点では未整備。整備された時点でこの目次に追加する。
