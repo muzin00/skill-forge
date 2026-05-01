@@ -1,0 +1,13 @@
+{
+  "name": "skill-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "mkdir -p dist && jco componentize src/index.js --wit ../wit/skill-runtime.wit --world-name skill-runtime --disable http --disable fetch-event --out dist/skill-runtime.wasm"
+  },
+  "devDependencies": {
+    "@bytecodealliance/componentize-js": "^0.18.0",
+    "@bytecodealliance/jco": "^1.10.0"
+  }
+}

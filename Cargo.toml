@@ -6,3 +6,7 @@ license = "MIT"
 repository = "https://github.com/muzin00/skill-forge"
 
 [dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+wasmtime = "27"
+wasmtime-wasi = "27"
