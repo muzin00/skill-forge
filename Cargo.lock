@@ -1641,6 +1641,7 @@ dependencies = [
  "anyhow",
  "clap",
  "dotenvy",
+ "serde_json",
  "wasmtime",
  "wasmtime-wasi",
  "wasmtime-wasi-http",

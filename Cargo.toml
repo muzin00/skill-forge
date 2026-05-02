@@ -9,6 +9,7 @@ repository = "https://github.com/muzin00/skill-forge"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 dotenvy = "0.15"
+serde_json = "1"
 wasmtime = "27"
 wasmtime-wasi = "27"
 wasmtime-wasi-http = "27"

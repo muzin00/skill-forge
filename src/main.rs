@@ -60,6 +60,8 @@ enum Command {
         prompt: String,
         #[arg(long)]
         model: String,
+        #[arg(long)]
+        signature_file: Option<PathBuf>,
     },
     Interpret {
         #[arg(long)]
@@ -132,7 +134,11 @@ fn main() -> Result<()> {
         } => run_skill(&engine, &skill, RunMode::Run(args_json)),
         Command::ExtractSchemas { skill } => run_skill(&engine, &skill, RunMode::ExtractSchemas),
         Command::Agent { prompt, model } => run_agent(&engine, &prompt, &model),
-        Command::Generate { prompt, model } => run_generate(&engine, &prompt, &model),
+        Command::Generate {
+            prompt,
+            model,
+            signature_file,
+        } => run_generate(&engine, &prompt, &model, signature_file.as_ref()),
         Command::Interpret { prompt, model } => run_interpret(&engine, &prompt, &model),
     }
 }
@@ -216,9 +222,25 @@ fn run_agent(engine: &Engine, prompt: &str, model: &str) -> Result<()> {
     Ok(())
 }
 
-fn run_generate(engine: &Engine, prompt: &str, model: &str) -> Result<()> {
+fn run_generate(
+    engine: &Engine,
+    prompt: &str,
+    model: &str,
+    signature_file: Option<&PathBuf>,
+) -> Result<()> {
     let api_key = env::var("ANTHROPIC_API_KEY")
         .context("ANTHROPIC_API_KEY environment variable is required")?;
+
+    let signature = match signature_file {
+        Some(path) => match load_signature(path) {
+            Ok(s) => Some(s),
+            Err(msg) => {
+                eprintln!("agent error: {msg}");
+                std::process::exit(1);
+            }
+        },
+        None => None,
+    };
 
     let component = Component::from_file(engine, AGENT_WASM)
         .with_context(|| format!("failed to load agent wasm: {AGENT_WASM}"))?;
@@ -236,7 +258,13 @@ fn run_generate(engine: &Engine, prompt: &str, model: &str) -> Result<()> {
 
     let runtime = agent_bindings::AgentRuntime::instantiate(&mut store, &component, &linker)?;
 
-    match runtime.call_generate_code(&mut store, prompt, model, &api_key)? {
+    let result = match &signature {
+        Some(sig) => runtime
+            .call_generate_code_from_signature(&mut store, prompt, sig, model, &api_key)?,
+        None => runtime.call_generate_code(&mut store, prompt, model, &api_key)?,
+    };
+
+    match result {
         Ok(generated) => {
             println!("code:");
             println!("{}", generated.code);
@@ -249,6 +277,40 @@ fn run_generate(engine: &Engine, prompt: &str, model: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn load_signature(
+    path: &PathBuf,
+) -> std::result::Result<Vec<agent_bindings::SignatureEntry>, String> {
+    let content = fs::read_to_string(path)
+        .map_err(|e| format!("failed to read signature file {}: {e}", path.display()))?;
+    let parsed: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| format!("parse-error: invalid JSON in signature file: {e}"))?;
+    let array = parsed
+        .as_array()
+        .ok_or_else(|| "parse-error: signature root is not an array".to_string())?;
+
+    let mut entries = Vec::with_capacity(array.len());
+    for (i, entry) in array.iter().enumerate() {
+        let obj = entry
+            .as_object()
+            .ok_or_else(|| format!("parse-error: signature entry {i} is not an object"))?;
+        let tool = obj.get("tool").and_then(|v| v.as_str()).ok_or_else(|| {
+            format!("parse-error: signature entry {i} is missing string field \"tool\"")
+        })?;
+        let input = obj.get("input").and_then(|v| v.as_str()).ok_or_else(|| {
+            format!("parse-error: signature entry {i} is missing string field \"input\"")
+        })?;
+        let output = obj.get("output").and_then(|v| v.as_str()).ok_or_else(|| {
+            format!("parse-error: signature entry {i} is missing string field \"output\"")
+        })?;
+        entries.push(agent_bindings::SignatureEntry {
+            tool: tool.to_string(),
+            input: input.to_string(),
+            output: output.to_string(),
+        });
+    }
+    Ok(entries)
 }
 
 fn run_interpret(engine: &Engine, prompt: &str, model: &str) -> Result<()> {
