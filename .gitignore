@@ -4,6 +4,9 @@
 runtime/node_modules/
 runtime/dist/
 
+agent/node_modules/
+agent/dist/
+
 .vscode/
 .idea/
 *.swp
