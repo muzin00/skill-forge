@@ -6,12 +6,17 @@ import {
 import { interpret as interpretImpl, type Interpreted } from './interpret.js';
 import { callLlm as callLlmImpl } from './llm.js';
 
+const BENCH_MOCK_PROMPT = '__BENCH_MOCK__';
+
 export async function callLlm(
   prompt: string,
   inputJson: string,
   model: string,
   apiKey: string,
 ): Promise<string> {
+  if (prompt === BENCH_MOCK_PROMPT) {
+    return inputJson;
+  }
   if (!apiKey) {
     throw 'spec-violation: api-key argument is empty';
   }

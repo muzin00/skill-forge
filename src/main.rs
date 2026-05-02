@@ -1,6 +1,7 @@
 use std::env;
 use std::fs;
 use std::path::PathBuf;
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -26,11 +27,21 @@ use skill_forge::runtime::llm_host::Host as LlmHost;
 use skill_forge::runtime::skill_loader_host::Host as SkillLoaderHost;
 use skill_forge::runtime::types::Host as TypesHost;
 
-const RUNTIME_WASM: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/runtime/dist/skill-runtime.wasm"
-);
-const AGENT_WASM: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/agent/dist/agent-runtime.wasm");
+const RUNTIME_CWASM: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/skill-runtime.cwasm"));
+const AGENT_CWASM: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/agent-runtime.cwasm"));
+
+fn trace_enabled() -> bool {
+    env::var("SKILL_FORGE_TRACE")
+        .map(|v| !v.is_empty() && v != "0")
+        .unwrap_or(false)
+}
+
+fn log_trace(name: &str, start: Instant) {
+    if trace_enabled() {
+        let ms = start.elapsed().as_secs_f64() * 1000.0;
+        eprintln!("[trace] {name}: {ms:.3}ms");
+    }
+}
 
 #[derive(Parser, Debug)]
 #[command(name = "skill-forge", about = "skill-forge host")]
@@ -106,13 +117,16 @@ impl LlmHost for SkillState {
             .primitives
             .as_mut()
             .ok_or_else(|| "callLlm is unavailable in this skill-runtime mode".to_string())?;
-        match backend.agent_runtime.call_call_llm(
+        let started = Instant::now();
+        let raw = backend.agent_runtime.call_call_llm(
             &mut backend.agent_store,
             &prompt,
             &input_json,
             &backend.model,
             &backend.api_key,
-        ) {
+        );
+        log_trace("callLlm roundtrip", started);
+        match raw {
             Ok(Ok(s)) => Ok(s),
             Ok(Err(msg)) => Err(msg),
             Err(e) => Err(format!("call-llm trap: {e}")),
@@ -121,11 +135,7 @@ impl LlmHost for SkillState {
 }
 
 impl ExecHost for SkillState {
-    fn exec_cmd(
-        &mut self,
-        cmd: String,
-        args: Vec<String>,
-    ) -> std::result::Result<String, String> {
+    fn exec_cmd(&mut self, cmd: String, args: Vec<String>) -> std::result::Result<String, String> {
         exec_cmd_impl(&cmd, &args)
     }
 }
@@ -155,11 +165,7 @@ impl WasiHttpView for AgentState {
 }
 
 impl agent_bindings::skill_forge::agent_runtime::exec_host::Host for AgentState {
-    fn exec_cmd(
-        &mut self,
-        cmd: String,
-        args: Vec<String>,
-    ) -> std::result::Result<String, String> {
+    fn exec_cmd(&mut self, cmd: String, args: Vec<String>) -> std::result::Result<String, String> {
         exec_cmd_impl(&cmd, &args)
     }
 }
@@ -185,9 +191,11 @@ fn main() -> Result<()> {
 
     let args = Args::parse();
 
+    let started = Instant::now();
     let mut config = Config::new();
     config.cache_config_load_default()?;
     let engine = Engine::new(&config)?;
+    log_trace("engine new", started);
 
     match args.command {
         Command::Run {
@@ -216,11 +224,29 @@ fn build_agent_linker(engine: &Engine) -> Result<Linker<AgentState>> {
     let mut linker: Linker<AgentState> = Linker::new(engine);
     wasmtime_wasi::add_to_linker_sync(&mut linker)?;
     wasmtime_wasi_http::add_only_http_to_linker_sync(&mut linker)?;
-    agent_bindings::skill_forge::agent_runtime::exec_host::add_to_linker(
-        &mut linker,
-        |state| state,
-    )?;
+    agent_bindings::skill_forge::agent_runtime::exec_host::add_to_linker(&mut linker, |state| {
+        state
+    })?;
     Ok(linker)
+}
+
+fn deserialize_runtime_component(engine: &Engine) -> Result<Component> {
+    let started = Instant::now();
+    // SAFETY: cwasm bytes are produced by build.rs with the same wasmtime version
+    // (Engine::precompile_component) embedded into this binary at compile time.
+    let component = unsafe { Component::deserialize(engine, RUNTIME_CWASM) }
+        .context("failed to deserialize embedded skill-runtime cwasm")?;
+    log_trace("runtime deserialize", started);
+    Ok(component)
+}
+
+fn deserialize_agent_component(engine: &Engine) -> Result<Component> {
+    let started = Instant::now();
+    // SAFETY: see deserialize_runtime_component.
+    let component = unsafe { Component::deserialize(engine, AGENT_CWASM) }
+        .context("failed to deserialize embedded agent-runtime cwasm")?;
+    log_trace("agent deserialize", started);
+    Ok(component)
 }
 
 fn run_skill_run(
@@ -235,15 +261,18 @@ fn run_skill_run(
     let source = fs::read_to_string(skill_path)
         .with_context(|| format!("failed to read skill source: {}", skill_path.display()))?;
 
-    let agent_component = Component::from_file(engine, AGENT_WASM)
-        .with_context(|| format!("failed to load agent wasm: {AGENT_WASM}"))?;
+    let agent_component = deserialize_agent_component(engine)?;
     let agent_linker = build_agent_linker(engine)?;
     let mut agent_store = Store::new(engine, build_agent_state());
-    let agent_runtime =
-        agent_bindings::AgentRuntime::instantiate(&mut agent_store, &agent_component, &agent_linker)?;
+    let started = Instant::now();
+    let agent_runtime = agent_bindings::AgentRuntime::instantiate(
+        &mut agent_store,
+        &agent_component,
+        &agent_linker,
+    )?;
+    log_trace("agent instantiate", started);
 
-    let component = Component::from_file(engine, RUNTIME_WASM)
-        .with_context(|| format!("failed to load runtime wasm: {RUNTIME_WASM}"))?;
+    let component = deserialize_runtime_component(engine)?;
 
     let mut linker: Linker<SkillState> = Linker::new(engine);
     wasmtime_wasi::add_to_linker_sync(&mut linker)?;
@@ -262,9 +291,18 @@ fn run_skill_run(
     };
     let mut store = Store::new(engine, state);
 
+    let started = Instant::now();
     let runtime = SkillRuntime::instantiate(&mut store, &component, &linker)?;
+    log_trace("runtime instantiate (incl. main.js eval)", started);
 
-    match runtime.call_run(&mut store, &args_json)? {
+    let started = Instant::now();
+    let r = runtime.call_run(&mut store, &args_json)?;
+    log_trace(
+        "run() (incl. JSON.parse + skill load + run + stringify)",
+        started,
+    );
+
+    match r {
         Ok(json) => println!("{json}"),
         Err(err) => {
             print_skill_error(&err);
@@ -295,8 +333,7 @@ fn run_generate(
         None => None,
     };
 
-    let component = Component::from_file(engine, AGENT_WASM)
-        .with_context(|| format!("failed to load agent wasm: {AGENT_WASM}"))?;
+    let component = deserialize_agent_component(engine)?;
 
     let linker = build_agent_linker(engine)?;
     let mut store = Store::new(engine, build_agent_state());
@@ -304,8 +341,9 @@ fn run_generate(
     let runtime = agent_bindings::AgentRuntime::instantiate(&mut store, &component, &linker)?;
 
     let result = match &signature {
-        Some(sig) => runtime
-            .call_generate_code_from_signature(&mut store, prompt, sig, model, &api_key)?,
+        Some(sig) => {
+            runtime.call_generate_code_from_signature(&mut store, prompt, sig, model, &api_key)?
+        }
         None => runtime.call_generate_code(&mut store, prompt, model, &api_key)?,
     };
 
@@ -362,8 +400,7 @@ fn run_interpret(engine: &Engine, prompt: &str, model: &str) -> Result<()> {
     let api_key = env::var("ANTHROPIC_API_KEY")
         .context("ANTHROPIC_API_KEY environment variable is required")?;
 
-    let component = Component::from_file(engine, AGENT_WASM)
-        .with_context(|| format!("failed to load agent wasm: {AGENT_WASM}"))?;
+    let component = deserialize_agent_component(engine)?;
 
     let linker = build_agent_linker(engine)?;
     let mut store = Store::new(engine, build_agent_state());
