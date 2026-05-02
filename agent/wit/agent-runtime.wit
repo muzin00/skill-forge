@@ -1,5 +1,9 @@
 package skill-forge:agent-runtime;
 
+interface exec-host {
+  exec-cmd: func(cmd: string, args: list<string>) -> result<string, string>;
+}
+
 world agent-runtime {
   record generated {
     code: string,
@@ -16,6 +20,8 @@ world agent-runtime {
     final-answer: string,
     signature: list<signature-entry>,
   }
+
+  import exec-host;
 
   export llm: func(prompt: string, model: string, api-key: string) -> result<string, string>;
   export generate-code: func(prompt: string, model: string, api-key: string) -> result<generated, string>;

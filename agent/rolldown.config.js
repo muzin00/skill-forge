@@ -6,5 +6,5 @@ export default defineConfig({
     file: 'dist/agent.js',
     format: 'esm',
   },
-  external: [/^wasi:/],
+  external: [/^wasi:/, /^skill-forge:/],
 });
