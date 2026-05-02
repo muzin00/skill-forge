@@ -12,7 +12,10 @@ export type ToolChoice =
 export interface MessagesCreateParams {
   model: string;
   max_tokens: number;
-  messages: Array<{ role: 'user' | 'assistant'; content: string }>;
+  messages: Array<{
+    role: 'user' | 'assistant';
+    content: string | RequestContentBlock[];
+  }>;
   system?: string;
   tools?: ToolDefinition[];
   tool_choice?: ToolChoice;
@@ -21,6 +24,11 @@ export interface MessagesCreateParams {
 export type ContentBlock =
   | { type: 'text'; text: string }
   | { type: 'tool_use'; id: string; name: string; input: unknown };
+
+export type RequestContentBlock =
+  | { type: 'text'; text: string }
+  | { type: 'tool_use'; id: string; name: string; input: unknown }
+  | { type: 'tool_result'; tool_use_id: string; content: string };
 
 export interface MessagesCreateResponse {
   id: string;

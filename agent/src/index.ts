@@ -1,5 +1,6 @@
 import { Anthropic, AnthropicAPIError } from './client.js';
 import { generateCode as generateCodeImpl } from './codegen.js';
+import { interpret as interpretImpl, type Interpreted } from './interpret.js';
 
 export async function llm(
   prompt: string,
@@ -37,4 +38,12 @@ export async function generateCode(
   apiKey: string,
 ): Promise<{ code: string; capabilities: string[] }> {
   return generateCodeImpl(prompt, model, apiKey);
+}
+
+export async function interpret(
+  prompt: string,
+  model: string,
+  apiKey: string,
+): Promise<Interpreted> {
+  return interpretImpl(prompt, model, apiKey);
 }
