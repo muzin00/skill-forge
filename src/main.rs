@@ -118,6 +118,28 @@ impl WasiHttpView for AgentState {
     }
 }
 
+impl agent_bindings::skill_forge::agent_runtime::exec_host::Host for AgentState {
+    fn exec_cmd(
+        &mut self,
+        cmd: String,
+        args: Vec<String>,
+    ) -> std::result::Result<String, String> {
+        let output = std::process::Command::new(&cmd)
+            .args(&args)
+            .output()
+            .map_err(|e| format!("exec-error: failed to spawn {cmd}: {e}"))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!(
+                "exec-error: {cmd} exited with status {}: {stderr}",
+                output.status
+            ));
+        }
+        String::from_utf8(output.stdout)
+            .map_err(|e| format!("exec-error: stdout is not valid UTF-8: {e}"))
+    }
+}
+
 fn main() -> Result<()> {
     let _ = dotenvy::dotenv();
 
@@ -201,6 +223,10 @@ fn run_agent(engine: &Engine, prompt: &str, model: &str) -> Result<()> {
     let mut linker: Linker<AgentState> = Linker::new(engine);
     wasmtime_wasi::add_to_linker_sync(&mut linker)?;
     wasmtime_wasi_http::add_only_http_to_linker_sync(&mut linker)?;
+    agent_bindings::skill_forge::agent_runtime::exec_host::add_to_linker(
+        &mut linker,
+        |state| state,
+    )?;
 
     let state = AgentState {
         ctx: WasiCtxBuilder::new().inherit_stdio().build(),
@@ -248,6 +274,10 @@ fn run_generate(
     let mut linker: Linker<AgentState> = Linker::new(engine);
     wasmtime_wasi::add_to_linker_sync(&mut linker)?;
     wasmtime_wasi_http::add_only_http_to_linker_sync(&mut linker)?;
+    agent_bindings::skill_forge::agent_runtime::exec_host::add_to_linker(
+        &mut linker,
+        |state| state,
+    )?;
 
     let state = AgentState {
         ctx: WasiCtxBuilder::new().inherit_stdio().build(),
@@ -323,6 +353,10 @@ fn run_interpret(engine: &Engine, prompt: &str, model: &str) -> Result<()> {
     let mut linker: Linker<AgentState> = Linker::new(engine);
     wasmtime_wasi::add_to_linker_sync(&mut linker)?;
     wasmtime_wasi_http::add_only_http_to_linker_sync(&mut linker)?;
+    agent_bindings::skill_forge::agent_runtime::exec_host::add_to_linker(
+        &mut linker,
+        |state| state,
+    )?;
 
     let state = AgentState {
         ctx: WasiCtxBuilder::new().inherit_stdio().build(),

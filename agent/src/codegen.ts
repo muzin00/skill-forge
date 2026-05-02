@@ -18,7 +18,7 @@ export interface SignatureEntry {
   output: string;
 }
 
-const ALLOWED_CAPABILITIES = ['callLlm'] as const;
+const ALLOWED_CAPABILITIES = ['callLlm', 'execCmd'] as const;
 type AllowedCapability = (typeof ALLOWED_CAPABILITIES)[number];
 
 const SHARED_POLICY = `# Code generation policy
@@ -26,18 +26,20 @@ const SHARED_POLICY = `# Code generation policy
 - Define a top-level \`async function run(input)\` as the entry point. \`input\` is an object whose shape you decide based on the task.
 - Write deterministic control flow in the code itself. Conditionals, loops, string manipulation, parsing, formatting, and arithmetic must be plain JavaScript — never delegated to an LLM.
 - Only delegate to the LLM (via \`callLlm\`) the parts that are inherently non-deterministic: classification, summarization, translation, free-form natural language generation, and similar judgement tasks.
+- Delegate external process invocations to \`execCmd\`. Output post-processing (\`JSON.parse\`, \`.split\`, regex, etc.) must be plain JavaScript outside the primitive call — never bake parsing into the command itself or ask \`callLlm\` to parse it.
 - The generated code runs in a minimal JS environment. Do not use Node.js APIs, browser APIs, npm packages, or imports. Standard ECMAScript and the host primitives listed below are the only things available.
 
 # Available host primitives
 
 - \`callLlm(prompt: string, input?: object): Promise<string>\` — Ask an LLM to produce a string given a prompt and structured input. Use this only for non-deterministic transformations.
+- \`execCmd(cmd: string, args: string[]): Promise<string>\` — Run an external command on the host and return its stdout as a string. Use this for deterministic external invocations (CLI tools, system commands).
 
 # Output protocol
 
 Call the \`submit_generated_code\` tool exactly once. Do not produce any free-form text response. The tool input must contain:
 
 - \`code\`: the full JavaScript source. Must define \`async function run(input)\` at the top level.
-- \`capabilities\`: the list of host primitives the code actually invokes. If the code calls \`callLlm\`, include \`"callLlm"\`. If the code uses no host primitives, return an empty list.
+- \`capabilities\`: the list of host primitives the code actually invokes. Include \`"callLlm"\` if the code calls \`callLlm\`, and \`"execCmd"\` if the code calls \`execCmd\`. If the code uses no host primitives, return an empty list.
 `;
 
 const SYSTEM_PROMPT = `You are a code generation agent for skill-forge.
@@ -56,16 +58,18 @@ ${SHARED_POLICY}
 The user message contains two sections:
 
 - \`<task>\` — the original natural-language task.
-- \`<signature>\` — the observed execution trace, a JSON array of \`{tool, input, output}\` entries. \`input\` and \`output\` are JSON-encoded strings. Each \`callLlm\` entry's \`input\` decodes to \`{prompt, input?}\`. The trailing \`finalAnswer\` entry's \`input\` decodes to \`{result}\`.
+- \`<signature>\` — the observed execution trace, a JSON array of \`{tool, input, output}\` entries. \`input\` and \`output\` are JSON-encoded strings. Each \`callLlm\` entry's \`input\` decodes to \`{prompt, input?}\`. Each \`execCmd\` entry's \`input\` decodes to \`{cmd, args}\`. The trailing \`finalAnswer\` entry's \`input\` decodes to \`{result}\`.
 
 You MUST produce code that mirrors the signature:
 
-1. **Control flow order**: The order of \`callLlm\` calls in the generated code must match the order of \`callLlm\` entries in the signature.
+1. **Control flow order**: The order of host-primitive calls (\`callLlm\` and \`execCmd\`) in the generated code must match the order of those entries in the signature.
 2. **Strict prompt mapping**: For each \`callLlm\` entry, the generated code's \`callLlm\` call must use the exact same \`prompt\` string literal that appears in that entry.
 3. **Strict input-key mapping**: The generated code's \`callLlm\` input object must use the same set of keys as the signature entry's input. Key names may not be renamed; do not add or remove keys.
-4. **finalAnswer → return**: The trailing \`finalAnswer.input.result\` corresponds to the value returned from \`run()\`. Construct the return value deterministically from intermediate variables (or return a string literal when the signature shows it is constant). Do not call \`callLlm\` to construct the return value.
-5. **Do not hardcode observed outputs**: The \`output\` field of a \`callLlm\` entry is one past observation, not a fixed answer. Re-invoke \`callLlm\` at runtime so future executions re-derive it.
-6. **No alternate termination**: The only function exit is the \`return\` corresponding to \`finalAnswer\`. Do not introduce throws or branches that bypass the recorded sequence.
+4. **execCmd cmd / args mapping**: For each \`execCmd\` entry, the generated code must call \`execCmd\` with the same \`cmd\` literal and the same \`args\` shape. Values that came from \`run()\`'s \`input\` (e.g. URLs the user supplies) must be parameterized through \`input\`; constant args remain string literals.
+5. **Output parsing in plain JS**: When the code consumes an \`execCmd\` result (JSON parsing, splitting, regex, field extraction), it must do so with plain JavaScript outside the primitive call. Do not delegate parsing to \`callLlm\`.
+6. **finalAnswer → return**: The trailing \`finalAnswer.input.result\` corresponds to the value returned from \`run()\`. Construct the return value deterministically from intermediate variables (or return a string literal when the signature shows it is constant). Do not call \`callLlm\` to construct the return value.
+7. **Do not hardcode observed outputs**: The \`output\` field of a \`callLlm\` or \`execCmd\` entry is one past observation, not a fixed answer. Re-invoke the primitive at runtime so future executions re-derive it.
+8. **No alternate termination**: The only function exit is the \`return\` corresponding to \`finalAnswer\`. Do not introduce throws or branches that bypass the recorded sequence.
 `;
 
 const SUBMIT_TOOL: ToolDefinition = {

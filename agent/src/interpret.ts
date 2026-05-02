@@ -1,3 +1,4 @@
+import { execCmd } from 'skill-forge:agent-runtime/exec-host';
 import {
   Anthropic,
   AnthropicAPIError,
@@ -28,13 +29,15 @@ You receive a natural-language task from the user. To accomplish it, you call to
 # Tools
 
 - \`callLlm(prompt: string, input?: object): string\` — Delegate a non-deterministic transformation (classification, summarization, translation, free-form generation, judgement) to an LLM. The host invokes Claude with \`prompt\` as the system instruction and \`JSON.stringify(input ?? {})\` as the user message, and returns the concatenated text response. Use this whenever the work cannot be reduced to a deterministic procedure.
+- \`execCmd(cmd: string, args: string[]): string\` — Run an external command on the host and return its stdout as a string. Use this for deterministic external lookups (e.g. \`gh issue view\`, \`git log\`, file reads via \`cat\`). Choose this over \`callLlm\` when the work is a concrete, repeatable command.
 - \`finalAnswer(result: string)\` — Submit the final user-facing answer and end the loop. Call exactly once, after all sub-tasks are complete.
 
 # Rules
 
 - Every turn must call a tool. Free-form text responses are forbidden.
 - Decompose the task into a sequence of tool calls. Each \`callLlm\` call should encapsulate one self-contained sub-task; do not bundle independent sub-tasks into a single prompt.
-- This loop observes only tool calls. Deterministic logic (conditionals, string manipulation, arithmetic) cannot be expressed in the loop directly — wrap such steps inside a \`callLlm\` call as well.
+- This loop observes only tool calls. Deterministic logic (conditionals, string manipulation, arithmetic) cannot be expressed in the loop directly — wrap such steps inside a \`callLlm\` call as well, OR delegate to \`execCmd\` when the deterministic step is naturally a shell command.
+- Prefer \`execCmd\` over \`callLlm\` when the sub-task is a concrete external invocation (CLI tool, system command). Reserve \`callLlm\` for true natural-language judgement.
 - When all sub-tasks are complete, call \`finalAnswer\` with the final result string.
 `;
 
@@ -50,6 +53,20 @@ const TOOLS: ToolDefinition[] = [
         input: { type: 'object', additionalProperties: true },
       },
       required: ['prompt'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'execCmd',
+    description:
+      '外部コマンドを実行し、stdout を文字列として返す。GitHub CLI 呼び出し・ファイル取得など、決定論的に書ける外部操作に使う。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        cmd: { type: 'string' },
+        args: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['cmd', 'args'],
       additionalProperties: false,
     },
   },
@@ -145,6 +162,23 @@ export async function interpret(
         continue;
       }
 
+      if (toolUse.name === 'execCmd') {
+        const { cmd, cmdArgs } = extractExecCmdArgs(toolUse.input);
+        let output: string;
+        try {
+          output = execCmd(cmd, cmdArgs);
+        } catch (e) {
+          throw `exec-error: ${e instanceof Error ? e.message : String(e)}`;
+        }
+        signature.push({
+          tool: 'execCmd',
+          input: inputJson,
+          output: JSON.stringify(output),
+        });
+        toolResults.push({ tool_use_id: toolUse.id, content: output });
+        continue;
+      }
+
       throw `spec-violation: unknown tool "${toolUse.name}"`;
     }
 
@@ -204,6 +238,32 @@ function extractFinalAnswerResult(input: unknown): string {
     throw 'spec-violation: finalAnswer tool_use input is missing string field "result"';
   }
   return result;
+}
+
+function extractExecCmdArgs(input: unknown): {
+  cmd: string;
+  cmdArgs: string[];
+} {
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) {
+    throw 'parse-error: execCmd tool_use input is not an object';
+  }
+  const obj = input as Record<string, unknown>;
+  const cmd = obj.cmd;
+  if (typeof cmd !== 'string') {
+    throw 'spec-violation: execCmd tool_use input is missing string field "cmd"';
+  }
+  const rawArgs = obj.args;
+  if (!Array.isArray(rawArgs)) {
+    throw 'spec-violation: execCmd tool_use input is missing array field "args"';
+  }
+  const cmdArgs: string[] = [];
+  for (const a of rawArgs) {
+    if (typeof a !== 'string') {
+      throw 'parse-error: execCmd tool_use input.args entry is not a string';
+    }
+    cmdArgs.push(a);
+  }
+  return { cmd, cmdArgs };
 }
 
 function extractCallLlmArgs(input: unknown): {
