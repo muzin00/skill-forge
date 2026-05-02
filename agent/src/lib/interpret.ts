@@ -1,4 +1,3 @@
-import { execCmd } from 'skill-forge:agent-runtime/exec-host';
 import {
   Anthropic,
   AnthropicAPIError,
@@ -6,8 +5,12 @@ import {
   type RequestContentBlock,
   type ToolDefinition,
   type ToolChoice,
-} from './client.js';
+} from './anthropic-client.js';
 import { callLlm as callLlmImpl } from './llm.js';
+
+declare const globalThis: {
+  execCmd: (cmd: string, args: string[]) => Promise<string>;
+};
 
 export interface SignatureEntry {
   tool: string;
@@ -172,7 +175,7 @@ export async function interpret(
         const { cmd, cmdArgs } = extractExecCmdArgs(toolUse.input);
         let output: string;
         try {
-          output = execCmd(cmd, cmdArgs);
+          output = await globalThis.execCmd(cmd, cmdArgs);
         } catch (e) {
           throw `exec-error: ${e instanceof Error ? e.message : String(e)}`;
         }

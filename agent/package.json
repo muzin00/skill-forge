@@ -1,14 +1,12 @@
 {
-  "name": "agent-runtime",
+  "name": "agent-trusted-skills",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "mkdir -p dist && rolldown -c && jco componentize dist/agent.js --wit wit/agent-runtime.wit --world-name agent-runtime --enable http --out dist/agent-runtime.wasm"
+    "build": "node build.mjs"
   },
   "devDependencies": {
-    "@bytecodealliance/componentize-js": "^0.20.0",
-    "@bytecodealliance/jco": "^1.19.0",
     "rolldown": "^1.0.0-rc.18",
     "typescript": "^5.6.0"
   }

@@ -43,28 +43,26 @@ export interface MessagesCreateResponse {
 
 export interface AnthropicOptions {
   apiKey: string;
-  baseUrl?: string;
-  version?: string;
 }
 
 export class AnthropicAPIError extends Error {
   status: number;
   body: string;
-  requestId?: string;
 
-  constructor(status: number, body: string, requestId?: string) {
+  constructor(status: number, body: string) {
     super(`HTTP ${status}: ${body}`);
     this.name = 'AnthropicAPIError';
     this.status = status;
     this.body = body;
-    this.requestId = requestId;
   }
 }
 
+declare const globalThis: {
+  anthropicMessages: (bodyJson: string, apiKey: string) => string;
+};
+
 export class Anthropic {
   private apiKey: string;
-  private baseUrl: string;
-  private version: string;
 
   messages: {
     create(params: MessagesCreateParams): Promise<MessagesCreateResponse>;
@@ -72,8 +70,6 @@ export class Anthropic {
 
   constructor(opts: AnthropicOptions) {
     this.apiKey = opts.apiKey;
-    this.baseUrl = opts.baseUrl ?? 'https://api.anthropic.com';
-    this.version = opts.version ?? '2023-06-01';
 
     this.messages = {
       create: (params) => this.createMessage(params),
@@ -83,23 +79,19 @@ export class Anthropic {
   private async createMessage(
     params: MessagesCreateParams,
   ): Promise<MessagesCreateResponse> {
-    const url = `${this.baseUrl}/v1/messages`;
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-api-key': this.apiKey,
-        'anthropic-version': this.version,
-      },
-      body: JSON.stringify(params),
-    });
-
-    if (!res.ok) {
-      const body = await res.text();
-      const requestId = res.headers.get('request-id') ?? undefined;
-      throw new AnthropicAPIError(res.status, body, requestId);
+    let raw: string;
+    try {
+      raw = globalThis.anthropicMessages(JSON.stringify(params), this.apiKey);
+    } catch (e) {
+      let msg = e instanceof Error ? e.message : String(e);
+      msg = msg.replace(/^(?:Error:\s*)+/, '');
+      const httpMatch = /^HTTP (\d+): (.*)$/s.exec(msg);
+      if (httpMatch) {
+        throw new AnthropicAPIError(Number(httpMatch[1]), httpMatch[2]);
+      }
+      throw new AnthropicAPIError(0, msg);
     }
 
-    return (await res.json()) as MessagesCreateResponse;
+    return JSON.parse(raw) as MessagesCreateResponse;
   }
 }
