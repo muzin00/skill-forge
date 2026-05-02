@@ -14,12 +14,6 @@ interface types {
     network-error,
     fs-error,
     user-error,
-    schema-extract-error,
-  }
-
-  record schemas {
-    inputs: string,
-    output: string,
   }
 }
 
@@ -36,12 +30,11 @@ interface exec-host {
 }
 
 world skill-runtime {
-  use types.{skill-error, schemas};
+  use types.{skill-error};
 
   import skill-loader-host;
   import llm-host;
   import exec-host;
 
   export run: func(args-json: string) -> result<string, skill-error>;
-  export extract-schemas: func() -> result<schemas, skill-error>;
 }

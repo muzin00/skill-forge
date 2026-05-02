@@ -49,16 +49,6 @@ enum Command {
         #[arg(long)]
         model: String,
     },
-    ExtractSchemas {
-        #[arg(long)]
-        skill: PathBuf,
-    },
-    Agent {
-        #[arg(long)]
-        prompt: String,
-        #[arg(long)]
-        model: String,
-    },
     Generate {
         #[arg(long)]
         prompt: String,
@@ -205,8 +195,6 @@ fn main() -> Result<()> {
             args: args_json,
             model,
         } => run_skill_run(&engine, &skill, args_json, model),
-        Command::ExtractSchemas { skill } => run_skill_extract_schemas(&engine, &skill),
-        Command::Agent { prompt, model } => run_agent(&engine, &prompt, &model),
         Command::Generate {
             prompt,
             model,
@@ -280,64 +268,6 @@ fn run_skill_run(
         Ok(json) => println!("{json}"),
         Err(err) => {
             print_skill_error(&err);
-            std::process::exit(1);
-        }
-    }
-
-    Ok(())
-}
-
-fn run_skill_extract_schemas(engine: &Engine, skill_path: &PathBuf) -> Result<()> {
-    let source = fs::read_to_string(skill_path)
-        .with_context(|| format!("failed to read skill source: {}", skill_path.display()))?;
-
-    let component = Component::from_file(engine, RUNTIME_WASM)
-        .with_context(|| format!("failed to load runtime wasm: {RUNTIME_WASM}"))?;
-
-    let mut linker: Linker<SkillState> = Linker::new(engine);
-    wasmtime_wasi::add_to_linker_sync(&mut linker)?;
-    SkillRuntime::add_to_linker(&mut linker, |state| state)?;
-
-    let state = SkillState {
-        ctx: WasiCtxBuilder::new().inherit_stdio().build(),
-        table: ResourceTable::new(),
-        skill_source: source,
-        primitives: None,
-    };
-    let mut store = Store::new(engine, state);
-
-    let runtime = SkillRuntime::instantiate(&mut store, &component, &linker)?;
-
-    match runtime.call_extract_schemas(&mut store)? {
-        Ok(schemas) => {
-            println!("inputs: {}", schemas.inputs);
-            println!("output: {}", schemas.output);
-        }
-        Err(err) => {
-            print_skill_error(&err);
-            std::process::exit(1);
-        }
-    }
-
-    Ok(())
-}
-
-fn run_agent(engine: &Engine, prompt: &str, model: &str) -> Result<()> {
-    let api_key = env::var("ANTHROPIC_API_KEY")
-        .context("ANTHROPIC_API_KEY environment variable is required")?;
-
-    let component = Component::from_file(engine, AGENT_WASM)
-        .with_context(|| format!("failed to load agent wasm: {AGENT_WASM}"))?;
-
-    let linker = build_agent_linker(engine)?;
-    let mut store = Store::new(engine, build_agent_state());
-
-    let runtime = agent_bindings::AgentRuntime::instantiate(&mut store, &component, &linker)?;
-
-    match runtime.call_llm(&mut store, prompt, model, &api_key)? {
-        Ok(text) => println!("{text}"),
-        Err(msg) => {
-            eprintln!("agent error: {msg}");
             std::process::exit(1);
         }
     }
