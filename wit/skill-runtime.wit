@@ -27,10 +27,20 @@ interface skill-loader-host {
   get-source: func() -> string;
 }
 
+interface llm-host {
+  call-llm: func(prompt: string, input-json: string) -> result<string, string>;
+}
+
+interface exec-host {
+  exec-cmd: func(cmd: string, args: list<string>) -> result<string, string>;
+}
+
 world skill-runtime {
   use types.{skill-error, schemas};
 
   import skill-loader-host;
+  import llm-host;
+  import exec-host;
 
   export run: func(args-json: string) -> result<string, skill-error>;
   export extract-schemas: func() -> result<schemas, skill-error>;

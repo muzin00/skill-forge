@@ -7,6 +7,7 @@ import {
   type ToolDefinition,
   type ToolChoice,
 } from './client.js';
+import { callLlm as callLlmImpl } from './llm.js';
 
 export interface SignatureEntry {
   tool: string;
@@ -152,7 +153,12 @@ export async function interpret(
 
       if (toolUse.name === 'callLlm') {
         const { callPrompt, callInput } = extractCallLlmArgs(toolUse.input);
-        const output = await hostCallLlm(client, model, callPrompt, callInput);
+        const output = await callLlmImpl(
+          callPrompt,
+          JSON.stringify(callInput ?? {}),
+          model,
+          apiKey,
+        );
         signature.push({
           tool: 'callLlm',
           input: inputJson,
@@ -198,35 +204,6 @@ export async function interpret(
   }
 
   throw 'spec-violation: max iterations exceeded';
-}
-
-async function hostCallLlm(
-  client: Anthropic,
-  model: string,
-  prompt: string,
-  input: Record<string, unknown> | undefined,
-): Promise<string> {
-  let response;
-  try {
-    response = await client.messages.create({
-      model,
-      max_tokens: MAX_TOKENS,
-      system: prompt,
-      messages: [
-        { role: 'user', content: JSON.stringify(input ?? {}) },
-      ],
-    });
-  } catch (e) {
-    if (e instanceof AnthropicAPIError) {
-      throw `api-error: HTTP ${e.status}: ${e.body}`;
-    }
-    throw `api-error: ${e instanceof Error ? e.message : String(e)}`;
-  }
-
-  return response.content
-    .filter((b): b is Extract<ContentBlock, { type: 'text' }> => b.type === 'text')
-    .map((b) => b.text)
-    .join('');
 }
 
 function extractFinalAnswerResult(input: unknown): string {

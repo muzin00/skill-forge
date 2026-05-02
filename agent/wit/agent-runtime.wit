@@ -24,6 +24,12 @@ world agent-runtime {
   import exec-host;
 
   export llm: func(prompt: string, model: string, api-key: string) -> result<string, string>;
+  export call-llm: func(
+    prompt: string,
+    input-json: string,
+    model: string,
+    api-key: string,
+  ) -> result<string, string>;
   export generate-code: func(prompt: string, model: string, api-key: string) -> result<generated, string>;
   export interpret: func(prompt: string, model: string, api-key: string) -> result<interpreted, string>;
   export generate-code-from-signature: func(
