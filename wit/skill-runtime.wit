@@ -29,12 +29,17 @@ interface exec-host {
   exec-cmd: func(cmd: string, args: list<string>) -> result<string, string>;
 }
 
+interface anthropic-host {
+  messages: func(body-json: string, api-key: string) -> result<string, string>;
+}
+
 world skill-runtime {
   use types.{skill-error};
 
   import skill-loader-host;
   import llm-host;
   import exec-host;
+  import anthropic-host;
 
   export run: func(args-json: string) -> result<string, skill-error>;
 }

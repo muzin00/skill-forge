@@ -2,7 +2,7 @@ import {
   Anthropic,
   AnthropicAPIError,
   type ContentBlock,
-} from './client.js';
+} from './anthropic-client.js';
 
 const MAX_TOKENS = 4096;
 

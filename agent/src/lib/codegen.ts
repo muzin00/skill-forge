@@ -5,7 +5,7 @@ import {
   type MessagesCreateResponse,
   type ToolDefinition,
   type ToolChoice,
-} from './client.js';
+} from './anthropic-client.js';
 
 export interface Generated {
   code: string;
