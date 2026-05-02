@@ -6,6 +6,6 @@ interface InterpretInput {
   apiKey: string;
 }
 
-export async function run(input: InterpretInput): Promise<Interpreted> {
+defineSkill(async (input: InterpretInput): Promise<Interpreted> => {
   return interpret(input.prompt, input.model, input.apiKey);
-}
+});

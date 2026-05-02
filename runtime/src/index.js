@@ -15,23 +15,43 @@ globalThis.anthropicMessages = function anthropicMessages(bodyJson, apiKey) {
   return hostAnthropicMessages(bodyJson, apiKey);
 };
 
+let __registered__;
+
+Object.defineProperty(globalThis, 'defineSkill', {
+  value: function defineSkill(runFn) {
+    if (typeof runFn !== 'function') {
+      throw skillError(
+        'runtime-error',
+        `defineSkill argument must be a function, got ${runFn === null ? 'null' : typeof runFn}`,
+      );
+    }
+    if (__registered__ !== undefined) {
+      throw skillError('runtime-error', 'defineSkill called more than once');
+    }
+    __registered__ = runFn;
+  },
+  writable: false,
+  configurable: false,
+});
+
 let skillModule = null;
 
 function loadSkill() {
   if (skillModule !== null) return skillModule;
 
+  __registered__ = undefined;
   const src = getSource();
-  const factory = new Function(`
-    ${src}
-    return { run: typeof run === 'function' ? run : undefined };
-  `);
-  const mod = factory();
+  const factory = new Function(src);
+  factory();
 
-  if (typeof mod !== 'object' || mod === null) {
-    throw skillError('runtime-error', 'skill module did not produce exports');
+  if (typeof __registered__ !== 'function') {
+    throw skillError(
+      'runtime-error',
+      'skill must call defineSkill(async (input) => { ... }) at top level',
+    );
   }
 
-  skillModule = mod;
+  skillModule = { run: __registered__ };
   return skillModule;
 }
 
@@ -61,7 +81,7 @@ export async function run(argsJson) {
   if (typeof mod.run !== 'function') {
     throw {
       code: 'runtime-error',
-      message: 'skill must export a `run` function',
+      message: 'skill did not register a run function via defineSkill',
       stack: undefined,
     };
   }

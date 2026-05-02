@@ -1,0 +1,1 @@
+defineSkill(123);
