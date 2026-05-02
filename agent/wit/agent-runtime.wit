@@ -1,0 +1,5 @@
+package skill-forge:agent-runtime;
+
+world agent-runtime {
+  export llm: func(prompt: string, model: string, api-key: string) -> result<string, string>;
+}
