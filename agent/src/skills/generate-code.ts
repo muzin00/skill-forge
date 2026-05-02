@@ -6,6 +6,6 @@ interface GenerateCodeInput {
   apiKey: string;
 }
 
-export async function run(input: GenerateCodeInput): Promise<Generated> {
+defineSkill(async (input: GenerateCodeInput): Promise<Generated> => {
   return generateCode(input.prompt, input.model, input.apiKey);
-}
+});

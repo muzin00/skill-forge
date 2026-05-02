@@ -1,3 +1,3 @@
-async function run(input) {
+defineSkill(async (input) => {
   return input;
-}
+});

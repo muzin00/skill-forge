@@ -11,13 +11,13 @@ interface GenerateCodeFromSignatureInput {
   apiKey: string;
 }
 
-export async function run(
-  input: GenerateCodeFromSignatureInput,
-): Promise<Generated> {
-  return generateCodeFromSignature(
-    input.prompt,
-    input.signature,
-    input.model,
-    input.apiKey,
-  );
-}
+defineSkill(
+  async (input: GenerateCodeFromSignatureInput): Promise<Generated> => {
+    return generateCodeFromSignature(
+      input.prompt,
+      input.signature,
+      input.model,
+      input.apiKey,
+    );
+  },
+);

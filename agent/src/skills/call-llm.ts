@@ -9,7 +9,7 @@ interface CallLlmInput {
   apiKey: string;
 }
 
-export async function run(input: CallLlmInput): Promise<{ output: string }> {
+defineSkill(async (input: CallLlmInput): Promise<{ output: string }> => {
   const { prompt, model, apiKey } = input;
   const inputJson = JSON.stringify(input.input ?? {});
 
@@ -22,4 +22,4 @@ export async function run(input: CallLlmInput): Promise<{ output: string }> {
 
   const output = await callLlm(prompt, inputJson, model, apiKey);
   return { output };
-}
+});
