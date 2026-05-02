@@ -1,15 +1,32 @@
+export interface ToolDefinition {
+  name: string;
+  description?: string;
+  input_schema: Record<string, unknown>;
+}
+
+export type ToolChoice =
+  | { type: 'auto' }
+  | { type: 'any' }
+  | { type: 'tool'; name: string };
+
 export interface MessagesCreateParams {
   model: string;
   max_tokens: number;
   messages: Array<{ role: 'user' | 'assistant'; content: string }>;
   system?: string;
+  tools?: ToolDefinition[];
+  tool_choice?: ToolChoice;
 }
+
+export type ContentBlock =
+  | { type: 'text'; text: string }
+  | { type: 'tool_use'; id: string; name: string; input: unknown };
 
 export interface MessagesCreateResponse {
   id: string;
   type: 'message';
   role: 'assistant';
-  content: Array<{ type: 'text'; text: string }>;
+  content: ContentBlock[];
   model: string;
   stop_reason: string | null;
   stop_sequence: string | null;
