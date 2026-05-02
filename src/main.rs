@@ -21,6 +21,8 @@ mod agent_bindings {
     });
 }
 
+use skill_forge::runtime::exec_host::Host as ExecHost;
+use skill_forge::runtime::llm_host::Host as LlmHost;
 use skill_forge::runtime::skill_loader_host::Host as SkillLoaderHost;
 use skill_forge::runtime::types::Host as TypesHost;
 
@@ -44,6 +46,8 @@ enum Command {
         skill: PathBuf,
         #[arg(long, default_value = "{}")]
         args: String,
+        #[arg(long)]
+        model: String,
     },
     ExtractSchemas {
         #[arg(long)]
@@ -71,10 +75,18 @@ enum Command {
     },
 }
 
+struct PrimitiveBackend {
+    model: String,
+    api_key: String,
+    agent_runtime: agent_bindings::AgentRuntime,
+    agent_store: Store<AgentState>,
+}
+
 struct SkillState {
     ctx: WasiCtx,
     table: ResourceTable,
     skill_source: String,
+    primitives: Option<PrimitiveBackend>,
 }
 
 impl WasiView for SkillState {
@@ -93,6 +105,40 @@ impl SkillLoaderHost for SkillState {
 }
 
 impl TypesHost for SkillState {}
+
+impl LlmHost for SkillState {
+    fn call_llm(
+        &mut self,
+        prompt: String,
+        input_json: String,
+    ) -> std::result::Result<String, String> {
+        let backend = self
+            .primitives
+            .as_mut()
+            .ok_or_else(|| "callLlm is unavailable in this skill-runtime mode".to_string())?;
+        match backend.agent_runtime.call_call_llm(
+            &mut backend.agent_store,
+            &prompt,
+            &input_json,
+            &backend.model,
+            &backend.api_key,
+        ) {
+            Ok(Ok(s)) => Ok(s),
+            Ok(Err(msg)) => Err(msg),
+            Err(e) => Err(format!("call-llm trap: {e}")),
+        }
+    }
+}
+
+impl ExecHost for SkillState {
+    fn exec_cmd(
+        &mut self,
+        cmd: String,
+        args: Vec<String>,
+    ) -> std::result::Result<String, String> {
+        exec_cmd_impl(&cmd, &args)
+    }
+}
 
 struct AgentState {
     ctx: WasiCtx,
@@ -124,20 +170,24 @@ impl agent_bindings::skill_forge::agent_runtime::exec_host::Host for AgentState 
         cmd: String,
         args: Vec<String>,
     ) -> std::result::Result<String, String> {
-        let output = std::process::Command::new(&cmd)
-            .args(&args)
-            .output()
-            .map_err(|e| format!("exec-error: failed to spawn {cmd}: {e}"))?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!(
-                "exec-error: {cmd} exited with status {}: {stderr}",
-                output.status
-            ));
-        }
-        String::from_utf8(output.stdout)
-            .map_err(|e| format!("exec-error: stdout is not valid UTF-8: {e}"))
+        exec_cmd_impl(&cmd, &args)
     }
+}
+
+fn exec_cmd_impl(cmd: &str, args: &[String]) -> std::result::Result<String, String> {
+    let output = std::process::Command::new(cmd)
+        .args(args)
+        .output()
+        .map_err(|e| format!("exec-error: failed to spawn {cmd}: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "exec-error: {cmd} exited with status {}: {stderr}",
+            output.status
+        ));
+    }
+    String::from_utf8(output.stdout)
+        .map_err(|e| format!("exec-error: stdout is not valid UTF-8: {e}"))
 }
 
 fn main() -> Result<()> {
@@ -153,8 +203,9 @@ fn main() -> Result<()> {
         Command::Run {
             skill,
             args: args_json,
-        } => run_skill(&engine, &skill, RunMode::Run(args_json)),
-        Command::ExtractSchemas { skill } => run_skill(&engine, &skill, RunMode::ExtractSchemas),
+            model,
+        } => run_skill_run(&engine, &skill, args_json, model),
+        Command::ExtractSchemas { skill } => run_skill_extract_schemas(&engine, &skill),
         Command::Agent { prompt, model } => run_agent(&engine, &prompt, &model),
         Command::Generate {
             prompt,
@@ -165,12 +216,78 @@ fn main() -> Result<()> {
     }
 }
 
-enum RunMode {
-    Run(String),
-    ExtractSchemas,
+fn build_agent_state() -> AgentState {
+    AgentState {
+        ctx: WasiCtxBuilder::new().inherit_stdio().build(),
+        http_ctx: WasiHttpCtx::new(),
+        table: ResourceTable::new(),
+    }
 }
 
-fn run_skill(engine: &Engine, skill_path: &PathBuf, mode: RunMode) -> Result<()> {
+fn build_agent_linker(engine: &Engine) -> Result<Linker<AgentState>> {
+    let mut linker: Linker<AgentState> = Linker::new(engine);
+    wasmtime_wasi::add_to_linker_sync(&mut linker)?;
+    wasmtime_wasi_http::add_only_http_to_linker_sync(&mut linker)?;
+    agent_bindings::skill_forge::agent_runtime::exec_host::add_to_linker(
+        &mut linker,
+        |state| state,
+    )?;
+    Ok(linker)
+}
+
+fn run_skill_run(
+    engine: &Engine,
+    skill_path: &PathBuf,
+    args_json: String,
+    model: String,
+) -> Result<()> {
+    let api_key = env::var("ANTHROPIC_API_KEY")
+        .context("ANTHROPIC_API_KEY environment variable is required")?;
+
+    let source = fs::read_to_string(skill_path)
+        .with_context(|| format!("failed to read skill source: {}", skill_path.display()))?;
+
+    let agent_component = Component::from_file(engine, AGENT_WASM)
+        .with_context(|| format!("failed to load agent wasm: {AGENT_WASM}"))?;
+    let agent_linker = build_agent_linker(engine)?;
+    let mut agent_store = Store::new(engine, build_agent_state());
+    let agent_runtime =
+        agent_bindings::AgentRuntime::instantiate(&mut agent_store, &agent_component, &agent_linker)?;
+
+    let component = Component::from_file(engine, RUNTIME_WASM)
+        .with_context(|| format!("failed to load runtime wasm: {RUNTIME_WASM}"))?;
+
+    let mut linker: Linker<SkillState> = Linker::new(engine);
+    wasmtime_wasi::add_to_linker_sync(&mut linker)?;
+    SkillRuntime::add_to_linker(&mut linker, |state| state)?;
+
+    let state = SkillState {
+        ctx: WasiCtxBuilder::new().inherit_stdio().build(),
+        table: ResourceTable::new(),
+        skill_source: source,
+        primitives: Some(PrimitiveBackend {
+            model,
+            api_key,
+            agent_runtime,
+            agent_store,
+        }),
+    };
+    let mut store = Store::new(engine, state);
+
+    let runtime = SkillRuntime::instantiate(&mut store, &component, &linker)?;
+
+    match runtime.call_run(&mut store, &args_json)? {
+        Ok(json) => println!("{json}"),
+        Err(err) => {
+            print_skill_error(&err);
+            std::process::exit(1);
+        }
+    }
+
+    Ok(())
+}
+
+fn run_skill_extract_schemas(engine: &Engine, skill_path: &PathBuf) -> Result<()> {
     let source = fs::read_to_string(skill_path)
         .with_context(|| format!("failed to read skill source: {}", skill_path.display()))?;
 
@@ -185,29 +302,21 @@ fn run_skill(engine: &Engine, skill_path: &PathBuf, mode: RunMode) -> Result<()>
         ctx: WasiCtxBuilder::new().inherit_stdio().build(),
         table: ResourceTable::new(),
         skill_source: source,
+        primitives: None,
     };
     let mut store = Store::new(engine, state);
 
     let runtime = SkillRuntime::instantiate(&mut store, &component, &linker)?;
 
-    match mode {
-        RunMode::Run(args_json) => match runtime.call_run(&mut store, &args_json)? {
-            Ok(json) => println!("{json}"),
-            Err(err) => {
-                print_skill_error(&err);
-                std::process::exit(1);
-            }
-        },
-        RunMode::ExtractSchemas => match runtime.call_extract_schemas(&mut store)? {
-            Ok(schemas) => {
-                println!("inputs: {}", schemas.inputs);
-                println!("output: {}", schemas.output);
-            }
-            Err(err) => {
-                print_skill_error(&err);
-                std::process::exit(1);
-            }
-        },
+    match runtime.call_extract_schemas(&mut store)? {
+        Ok(schemas) => {
+            println!("inputs: {}", schemas.inputs);
+            println!("output: {}", schemas.output);
+        }
+        Err(err) => {
+            print_skill_error(&err);
+            std::process::exit(1);
+        }
     }
 
     Ok(())
@@ -220,20 +329,8 @@ fn run_agent(engine: &Engine, prompt: &str, model: &str) -> Result<()> {
     let component = Component::from_file(engine, AGENT_WASM)
         .with_context(|| format!("failed to load agent wasm: {AGENT_WASM}"))?;
 
-    let mut linker: Linker<AgentState> = Linker::new(engine);
-    wasmtime_wasi::add_to_linker_sync(&mut linker)?;
-    wasmtime_wasi_http::add_only_http_to_linker_sync(&mut linker)?;
-    agent_bindings::skill_forge::agent_runtime::exec_host::add_to_linker(
-        &mut linker,
-        |state| state,
-    )?;
-
-    let state = AgentState {
-        ctx: WasiCtxBuilder::new().inherit_stdio().build(),
-        http_ctx: WasiHttpCtx::new(),
-        table: ResourceTable::new(),
-    };
-    let mut store = Store::new(engine, state);
+    let linker = build_agent_linker(engine)?;
+    let mut store = Store::new(engine, build_agent_state());
 
     let runtime = agent_bindings::AgentRuntime::instantiate(&mut store, &component, &linker)?;
 
@@ -271,20 +368,8 @@ fn run_generate(
     let component = Component::from_file(engine, AGENT_WASM)
         .with_context(|| format!("failed to load agent wasm: {AGENT_WASM}"))?;
 
-    let mut linker: Linker<AgentState> = Linker::new(engine);
-    wasmtime_wasi::add_to_linker_sync(&mut linker)?;
-    wasmtime_wasi_http::add_only_http_to_linker_sync(&mut linker)?;
-    agent_bindings::skill_forge::agent_runtime::exec_host::add_to_linker(
-        &mut linker,
-        |state| state,
-    )?;
-
-    let state = AgentState {
-        ctx: WasiCtxBuilder::new().inherit_stdio().build(),
-        http_ctx: WasiHttpCtx::new(),
-        table: ResourceTable::new(),
-    };
-    let mut store = Store::new(engine, state);
+    let linker = build_agent_linker(engine)?;
+    let mut store = Store::new(engine, build_agent_state());
 
     let runtime = agent_bindings::AgentRuntime::instantiate(&mut store, &component, &linker)?;
 
@@ -350,20 +435,8 @@ fn run_interpret(engine: &Engine, prompt: &str, model: &str) -> Result<()> {
     let component = Component::from_file(engine, AGENT_WASM)
         .with_context(|| format!("failed to load agent wasm: {AGENT_WASM}"))?;
 
-    let mut linker: Linker<AgentState> = Linker::new(engine);
-    wasmtime_wasi::add_to_linker_sync(&mut linker)?;
-    wasmtime_wasi_http::add_only_http_to_linker_sync(&mut linker)?;
-    agent_bindings::skill_forge::agent_runtime::exec_host::add_to_linker(
-        &mut linker,
-        |state| state,
-    )?;
-
-    let state = AgentState {
-        ctx: WasiCtxBuilder::new().inherit_stdio().build(),
-        http_ctx: WasiHttpCtx::new(),
-        table: ResourceTable::new(),
-    };
-    let mut store = Store::new(engine, state);
+    let linker = build_agent_linker(engine)?;
+    let mut store = Store::new(engine, build_agent_state());
 
     let runtime = agent_bindings::AgentRuntime::instantiate(&mut store, &component, &linker)?;
 

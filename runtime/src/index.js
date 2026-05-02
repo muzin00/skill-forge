@@ -1,4 +1,14 @@
 import { getSource } from 'skill-forge:runtime/skill-loader-host';
+import { callLlm as hostCallLlm } from 'skill-forge:runtime/llm-host';
+import { execCmd as hostExecCmd } from 'skill-forge:runtime/exec-host';
+
+globalThis.callLlm = async function callLlm(prompt, input) {
+  return hostCallLlm(prompt, JSON.stringify(input ?? {}));
+};
+
+globalThis.execCmd = async function execCmd(cmd, args) {
+  return hostExecCmd(cmd, args);
+};
 
 let skillModule = null;
 
@@ -7,9 +17,8 @@ function loadSkill() {
 
   const src = getSource();
   const factory = new Function(`
-    const exports = {};
     ${src}
-    return exports;
+    return { run: typeof run === 'function' ? run : undefined };
   `);
   const mod = factory();
 
@@ -36,7 +45,7 @@ function rethrow(e, defaultCode) {
   };
 }
 
-export function run(argsJson) {
+export async function run(argsJson) {
   let mod;
   try {
     mod = loadSkill();
@@ -65,7 +74,7 @@ export function run(argsJson) {
 
   let result;
   try {
-    result = mod.run(args);
+    result = await mod.run(args);
   } catch (e) {
     throw {
       code: 'user-error',

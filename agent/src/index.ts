@@ -5,6 +5,7 @@ import {
   type SignatureEntry,
 } from './codegen.js';
 import { interpret as interpretImpl, type Interpreted } from './interpret.js';
+import { callLlm as callLlmImpl } from './llm.js';
 
 export async function llm(
   prompt: string,
@@ -34,6 +35,18 @@ export async function llm(
     if (typeof e === 'string') throw e;
     throw e instanceof Error ? e.message : String(e);
   }
+}
+
+export async function callLlm(
+  prompt: string,
+  inputJson: string,
+  model: string,
+  apiKey: string,
+): Promise<string> {
+  if (!apiKey) {
+    throw 'spec-violation: api-key argument is empty';
+  }
+  return callLlmImpl(prompt, inputJson, model, apiKey);
 }
 
 export async function generateCode(
