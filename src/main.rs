@@ -58,6 +58,12 @@ enum Command {
         #[arg(long)]
         model: String,
     },
+    Generate {
+        #[arg(long)]
+        prompt: String,
+        #[arg(long)]
+        model: String,
+    },
 }
 
 struct SkillState {
@@ -123,6 +129,7 @@ fn main() -> Result<()> {
         } => run_skill(&engine, &skill, RunMode::Run(args_json)),
         Command::ExtractSchemas { skill } => run_skill(&engine, &skill, RunMode::ExtractSchemas),
         Command::Agent { prompt, model } => run_agent(&engine, &prompt, &model),
+        Command::Generate { prompt, model } => run_generate(&engine, &prompt, &model),
     }
 }
 
@@ -197,6 +204,42 @@ fn run_agent(engine: &Engine, prompt: &str, model: &str) -> Result<()> {
 
     match runtime.call_llm(&mut store, prompt, model, &api_key)? {
         Ok(text) => println!("{text}"),
+        Err(msg) => {
+            eprintln!("agent error: {msg}");
+            std::process::exit(1);
+        }
+    }
+
+    Ok(())
+}
+
+fn run_generate(engine: &Engine, prompt: &str, model: &str) -> Result<()> {
+    let api_key = env::var("ANTHROPIC_API_KEY")
+        .context("ANTHROPIC_API_KEY environment variable is required")?;
+
+    let component = Component::from_file(engine, AGENT_WASM)
+        .with_context(|| format!("failed to load agent wasm: {AGENT_WASM}"))?;
+
+    let mut linker: Linker<AgentState> = Linker::new(engine);
+    wasmtime_wasi::add_to_linker_sync(&mut linker)?;
+    wasmtime_wasi_http::add_only_http_to_linker_sync(&mut linker)?;
+
+    let state = AgentState {
+        ctx: WasiCtxBuilder::new().inherit_stdio().build(),
+        http_ctx: WasiHttpCtx::new(),
+        table: ResourceTable::new(),
+    };
+    let mut store = Store::new(engine, state);
+
+    let runtime =
+        agent_bindings::AgentRuntime::instantiate(&mut store, &component, &linker)?;
+
+    match runtime.call_generate_code(&mut store, prompt, model, &api_key)? {
+        Ok(generated) => {
+            println!("code:");
+            println!("{}", generated.code);
+            println!("capabilities: {}", generated.capabilities.join(", "));
+        }
         Err(msg) => {
             eprintln!("agent error: {msg}");
             std::process::exit(1);

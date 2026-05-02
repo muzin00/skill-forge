@@ -1,4 +1,5 @@
 import { Anthropic, AnthropicAPIError } from './client.js';
+import { generateCode as generateCodeImpl } from './codegen.js';
 
 export async function llm(
   prompt: string,
@@ -28,4 +29,12 @@ export async function llm(
     if (typeof e === 'string') throw e;
     throw e instanceof Error ? e.message : String(e);
   }
+}
+
+export async function generateCode(
+  prompt: string,
+  model: string,
+  apiKey: string,
+): Promise<{ code: string; capabilities: string[] }> {
+  return generateCodeImpl(prompt, model, apiKey);
 }

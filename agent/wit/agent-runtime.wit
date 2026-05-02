@@ -1,5 +1,11 @@
 package skill-forge:agent-runtime;
 
 world agent-runtime {
+  record generated {
+    code: string,
+    capabilities: list<string>,
+  }
+
   export llm: func(prompt: string, model: string, api-key: string) -> result<string, string>;
+  export generate-code: func(prompt: string, model: string, api-key: string) -> result<generated, string>;
 }
