@@ -28,10 +28,7 @@ const RUNTIME_WASM: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/runtime/dist/skill-runtime.wasm"
 );
-const AGENT_WASM: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/agent/dist/agent-runtime.wasm"
-);
+const AGENT_WASM: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/agent/dist/agent-runtime.wasm");
 
 #[derive(Parser, Debug)]
 #[command(name = "skill-forge", about = "skill-forge host")]
@@ -59,6 +56,12 @@ enum Command {
         model: String,
     },
     Generate {
+        #[arg(long)]
+        prompt: String,
+        #[arg(long)]
+        model: String,
+    },
+    Interpret {
         #[arg(long)]
         prompt: String,
         #[arg(long)]
@@ -130,6 +133,7 @@ fn main() -> Result<()> {
         Command::ExtractSchemas { skill } => run_skill(&engine, &skill, RunMode::ExtractSchemas),
         Command::Agent { prompt, model } => run_agent(&engine, &prompt, &model),
         Command::Generate { prompt, model } => run_generate(&engine, &prompt, &model),
+        Command::Interpret { prompt, model } => run_interpret(&engine, &prompt, &model),
     }
 }
 
@@ -199,8 +203,7 @@ fn run_agent(engine: &Engine, prompt: &str, model: &str) -> Result<()> {
     };
     let mut store = Store::new(engine, state);
 
-    let runtime =
-        agent_bindings::AgentRuntime::instantiate(&mut store, &component, &linker)?;
+    let runtime = agent_bindings::AgentRuntime::instantiate(&mut store, &component, &linker)?;
 
     match runtime.call_llm(&mut store, prompt, model, &api_key)? {
         Ok(text) => println!("{text}"),
@@ -231,8 +234,7 @@ fn run_generate(engine: &Engine, prompt: &str, model: &str) -> Result<()> {
     };
     let mut store = Store::new(engine, state);
 
-    let runtime =
-        agent_bindings::AgentRuntime::instantiate(&mut store, &component, &linker)?;
+    let runtime = agent_bindings::AgentRuntime::instantiate(&mut store, &component, &linker)?;
 
     match runtime.call_generate_code(&mut store, prompt, model, &api_key)? {
         Ok(generated) => {
@@ -247,6 +249,79 @@ fn run_generate(engine: &Engine, prompt: &str, model: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn run_interpret(engine: &Engine, prompt: &str, model: &str) -> Result<()> {
+    let api_key = env::var("ANTHROPIC_API_KEY")
+        .context("ANTHROPIC_API_KEY environment variable is required")?;
+
+    let component = Component::from_file(engine, AGENT_WASM)
+        .with_context(|| format!("failed to load agent wasm: {AGENT_WASM}"))?;
+
+    let mut linker: Linker<AgentState> = Linker::new(engine);
+    wasmtime_wasi::add_to_linker_sync(&mut linker)?;
+    wasmtime_wasi_http::add_only_http_to_linker_sync(&mut linker)?;
+
+    let state = AgentState {
+        ctx: WasiCtxBuilder::new().inherit_stdio().build(),
+        http_ctx: WasiHttpCtx::new(),
+        table: ResourceTable::new(),
+    };
+    let mut store = Store::new(engine, state);
+
+    let runtime = agent_bindings::AgentRuntime::instantiate(&mut store, &component, &linker)?;
+
+    match runtime.call_interpret(&mut store, prompt, model, &api_key)? {
+        Ok(interpreted) => {
+            println!("final-answer: {}", interpreted.final_answer);
+            println!("signature:");
+            print!("[");
+            for (i, entry) in interpreted.signature.iter().enumerate() {
+                if i > 0 {
+                    print!(",");
+                }
+                println!();
+                print!(
+                    "  {{\"tool\": {}, \"input\": {}, \"output\": {}}}",
+                    json_escape_string(&entry.tool),
+                    json_escape_string(&entry.input),
+                    json_escape_string(&entry.output)
+                );
+            }
+            if !interpreted.signature.is_empty() {
+                println!();
+            }
+            println!("]");
+        }
+        Err(msg) => {
+            eprintln!("agent error: {msg}");
+            std::process::exit(1);
+        }
+    }
+
+    Ok(())
+}
+
+fn json_escape_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\x08' => out.push_str("\\b"),
+            '\x0c' => out.push_str("\\f"),
+            c if (c as u32) < 0x20 => {
+                out.push_str(&format!("\\u{:04x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 fn print_skill_error(err: &SkillError) {

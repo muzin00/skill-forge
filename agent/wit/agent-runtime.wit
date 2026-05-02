@@ -6,6 +6,18 @@ world agent-runtime {
     capabilities: list<string>,
   }
 
+  record signature-entry {
+    tool: string,
+    input: string,
+    output: string,
+  }
+
+  record interpreted {
+    final-answer: string,
+    signature: list<signature-entry>,
+  }
+
   export llm: func(prompt: string, model: string, api-key: string) -> result<string, string>;
   export generate-code: func(prompt: string, model: string, api-key: string) -> result<generated, string>;
+  export interpret: func(prompt: string, model: string, api-key: string) -> result<interpreted, string>;
 }
