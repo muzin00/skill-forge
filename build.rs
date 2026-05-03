@@ -17,6 +17,9 @@ fn main() {
         "agent/dist/skills/interpret.js",
         "agent/dist/skills/generate-code.js",
         "agent/dist/skills/generate-code-from-signature.js",
+        "agent/dist/skills/echo.js",
+        "agent/dist/skills/error.js",
+        "agent/dist/skills/compose.js",
     ] {
         println!("cargo:rerun-if-changed={skill}");
     }

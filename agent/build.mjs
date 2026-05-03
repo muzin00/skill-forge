@@ -6,6 +6,9 @@ const SKILLS = [
   'interpret',
   'generate-code',
   'generate-code-from-signature',
+  'echo',
+  'error',
+  'compose',
 ];
 
 await mkdir('dist/skills', { recursive: true });
