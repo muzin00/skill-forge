@@ -10,6 +10,8 @@ use wasmtime::component::{Component, Linker, ResourceTable, bindgen};
 use wasmtime::{Config, Engine, Store};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiView};
 
+mod skill_args;
+
 bindgen!({
     path: "wit",
     world: "skill-runtime",
@@ -94,13 +96,10 @@ struct Args {
 
 #[derive(Subcommand, Debug)]
 enum Command {
+    #[command(disable_help_flag = true)]
     Run {
-        #[arg(long)]
-        skill: PathBuf,
-        #[arg(long, default_value = "{}")]
-        args: String,
-        #[arg(long)]
-        model: String,
+        #[arg(allow_hyphen_values = true, trailing_var_arg = true, num_args = 0..)]
+        argv: Vec<String>,
     },
     Generate {
         #[arg(long)]
@@ -353,11 +352,7 @@ fn main() -> Result<()> {
     log_trace("engine new", started);
 
     match args.command {
-        Command::Run {
-            skill,
-            args: args_json,
-            model,
-        } => run_skill_run(&engine, &skill, args_json, model),
+        Command::Run { argv } => run_skill_run(&engine, argv),
         Command::Generate {
             prompt,
             model,
@@ -412,18 +407,15 @@ fn instantiate(
     Ok((store, runtime))
 }
 
-fn run_skill_run(
-    engine: &Engine,
-    skill_path: &PathBuf,
-    args_json: String,
-    model: String,
-) -> Result<()> {
+fn run_skill_run(engine: &Engine, raw_argv: Vec<String>) -> Result<()> {
+    let (skill_path, model, skill_flag_argv) = parse_run_argv(raw_argv);
+
     let api_key = env::var("ANTHROPIC_API_KEY")
         .context("ANTHROPIC_API_KEY environment variable is required")?;
 
-    let source = fs::read_to_string(skill_path)
+    let source = fs::read_to_string(&skill_path)
         .with_context(|| format!("failed to read skill source: {}", skill_path.display()))?;
-    let schema_path = schema_path_for(skill_path);
+    let schema_path = schema_path_for(&skill_path);
     let schema_source = fs::read_to_string(&schema_path)
         .with_context(|| format!("failed to read schema source: {}", schema_path.display()))?;
 
@@ -443,10 +435,24 @@ fn run_skill_run(
     let schema_started = Instant::now();
     let schema_result = runtime.call_get_schema(&mut store)?;
     log_trace("get-schema() (incl. schema load)", schema_started);
-    if let Err(err) = schema_result {
-        print_skill_error(&err);
-        std::process::exit(1);
-    }
+    let schema_json = match schema_result {
+        Ok(json) => json,
+        Err(err) => {
+            print_skill_error(&err);
+            std::process::exit(1);
+        }
+    };
+
+    let schema_value: serde_json::Value = serde_json::from_str(&schema_json)
+        .with_context(|| format!("failed to parse schema JSON: {schema_json}"))?;
+
+    let args_json = match skill_args::build_args_json(&schema_value, &skill_flag_argv) {
+        Ok(json) => json,
+        Err(msg) => {
+            eprintln!("{msg}");
+            std::process::exit(2);
+        }
+    };
 
     let started = Instant::now();
     let r = runtime.call_run(&mut store, &args_json)?;
@@ -464,6 +470,60 @@ fn run_skill_run(
     }
 
     Ok(())
+}
+
+fn parse_run_argv(argv: Vec<String>) -> (PathBuf, String, Vec<String>) {
+    let mut skill: Option<PathBuf> = None;
+    let mut model: Option<String> = None;
+    let mut skill_flags: Vec<String> = Vec::new();
+
+    let mut i = 0;
+    while i < argv.len() {
+        let token = &argv[i];
+        match token.as_str() {
+            "--skill" => {
+                let value = match argv.get(i + 1) {
+                    Some(v) => v.clone(),
+                    None => {
+                        eprintln!("Error: --skill: missing value");
+                        std::process::exit(2);
+                    }
+                };
+                skill = Some(PathBuf::from(value));
+                i += 2;
+            }
+            "--model" => {
+                let value = match argv.get(i + 1) {
+                    Some(v) => v.clone(),
+                    None => {
+                        eprintln!("Error: --model: missing value");
+                        std::process::exit(2);
+                    }
+                };
+                model = Some(value);
+                i += 2;
+            }
+            t if t == "--args" || t.starts_with("--args=") => {
+                eprintln!("Error: --args: unknown flag");
+                std::process::exit(2);
+            }
+            _ => {
+                skill_flags.push(token.clone());
+                i += 1;
+            }
+        }
+    }
+
+    let skill = skill.unwrap_or_else(|| {
+        eprintln!("Error: --skill: required");
+        std::process::exit(2);
+    });
+    let model = model.unwrap_or_else(|| {
+        eprintln!("Error: --model: required");
+        std::process::exit(2);
+    });
+
+    (skill, model, skill_flags)
 }
 
 fn schema_path_for(skill_path: &PathBuf) -> PathBuf {

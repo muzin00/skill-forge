@@ -1,0 +1,8 @@
+defineSchema({
+  type: 'object',
+  properties: {
+    count: { type: 'integer' },
+  },
+  required: ['count'],
+  additionalProperties: false,
+});
