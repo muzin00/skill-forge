@@ -1,7 +1,5 @@
 import { callLlm } from '../../lib/llm.js';
 
-const BENCH_MOCK_PROMPT = '__BENCH_MOCK__';
-
 interface CallLlmInput {
   prompt: string;
   input?: unknown;
@@ -13,9 +11,6 @@ defineSkill(async (input: CallLlmInput): Promise<{ output: string }> => {
   const { prompt, model, apiKey } = input;
   const inputJson = JSON.stringify(input.input ?? {});
 
-  if (prompt === BENCH_MOCK_PROMPT) {
-    return { output: inputJson };
-  }
   if (!apiKey) {
     throw 'spec-violation: api-key argument is empty';
   }
