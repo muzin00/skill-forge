@@ -1,4 +1,4 @@
-import { callLlm } from '../lib/llm.js';
+import { callLlm } from '../../lib/llm.js';
 
 const BENCH_MOCK_PROMPT = '__BENCH_MOCK__';
 

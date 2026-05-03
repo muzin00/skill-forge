@@ -11,14 +11,15 @@ const SKILLS = [
   'compose',
 ];
 
-await mkdir('dist/skills', { recursive: true });
-
 for (const name of SKILLS) {
-  await build({
-    input: `src/skills/${name}.ts`,
-    output: {
-      file: `dist/skills/${name}.js`,
-      format: 'esm',
-    },
-  });
+  await mkdir(`dist/skills/${name}`, { recursive: true });
+  for (const part of ['skill', 'schema']) {
+    await build({
+      input: `src/skills/${name}/${part}.ts`,
+      output: {
+        file: `dist/skills/${name}/${part}.js`,
+        format: 'esm',
+      },
+    });
+  }
 }

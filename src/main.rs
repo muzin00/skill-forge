@@ -20,41 +20,56 @@ use skill_forge::runtime::anthropic_host::Host as AnthropicHost;
 use skill_forge::runtime::exec_host::Host as ExecHost;
 use skill_forge::runtime::invoke_host::Host as InvokeHost;
 use skill_forge::runtime::llm_host::Host as LlmHost;
+use skill_forge::runtime::schema_loader_host::Host as SchemaLoaderHost;
 use skill_forge::runtime::skill_loader_host::Host as SkillLoaderHost;
 use skill_forge::runtime::types::{ErrorCode, Host as TypesHost};
 
 const RUNTIME_CWASM: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/skill-runtime.cwasm"));
 
 #[allow(dead_code)]
-const SKILL_CALL_LLM_JS: &str = include_str!("../agent/dist/skills/call-llm.js");
-const SKILL_INTERPRET_JS: &str = include_str!("../agent/dist/skills/interpret.js");
-const SKILL_GENERATE_CODE_JS: &str = include_str!("../agent/dist/skills/generate-code.js");
+const SKILL_CALL_LLM_JS: &str = include_str!("../agent/dist/skills/call-llm/skill.js");
+const SKILL_INTERPRET_JS: &str = include_str!("../agent/dist/skills/interpret/skill.js");
+const SKILL_GENERATE_CODE_JS: &str = include_str!("../agent/dist/skills/generate-code/skill.js");
 const SKILL_GENERATE_CODE_FROM_SIGNATURE_JS: &str =
-    include_str!("../agent/dist/skills/generate-code-from-signature.js");
-const SKILL_ECHO_JS: &str = include_str!("../agent/dist/skills/echo.js");
-const SKILL_ERROR_JS: &str = include_str!("../agent/dist/skills/error.js");
-const SKILL_COMPOSE_JS: &str = include_str!("../agent/dist/skills/compose.js");
+    include_str!("../agent/dist/skills/generate-code-from-signature/skill.js");
+const SKILL_ECHO_JS: &str = include_str!("../agent/dist/skills/echo/skill.js");
+const SKILL_ERROR_JS: &str = include_str!("../agent/dist/skills/error/skill.js");
+const SKILL_COMPOSE_JS: &str = include_str!("../agent/dist/skills/compose/skill.js");
+
+const SCHEMA_CALL_LLM_JS: &str = include_str!("../agent/dist/skills/call-llm/schema.js");
+const SCHEMA_INTERPRET_JS: &str = include_str!("../agent/dist/skills/interpret/schema.js");
+const SCHEMA_GENERATE_CODE_JS: &str = include_str!("../agent/dist/skills/generate-code/schema.js");
+const SCHEMA_GENERATE_CODE_FROM_SIGNATURE_JS: &str =
+    include_str!("../agent/dist/skills/generate-code-from-signature/schema.js");
+const SCHEMA_ECHO_JS: &str = include_str!("../agent/dist/skills/echo/schema.js");
+const SCHEMA_ERROR_JS: &str = include_str!("../agent/dist/skills/error/schema.js");
+const SCHEMA_COMPOSE_JS: &str = include_str!("../agent/dist/skills/compose/schema.js");
 
 const MAX_INVOKE_DEPTH: usize = 8;
 
-const BUILTIN_SKILLS: &[(&str, &str)] = &[
-    ("call-llm", SKILL_CALL_LLM_JS),
-    ("interpret", SKILL_INTERPRET_JS),
-    ("generate-code", SKILL_GENERATE_CODE_JS),
+const BUILTIN_SKILLS: &[(&str, &str, &str)] = &[
+    ("call-llm", SKILL_CALL_LLM_JS, SCHEMA_CALL_LLM_JS),
+    ("interpret", SKILL_INTERPRET_JS, SCHEMA_INTERPRET_JS),
+    (
+        "generate-code",
+        SKILL_GENERATE_CODE_JS,
+        SCHEMA_GENERATE_CODE_JS,
+    ),
     (
         "generate-code-from-signature",
         SKILL_GENERATE_CODE_FROM_SIGNATURE_JS,
+        SCHEMA_GENERATE_CODE_FROM_SIGNATURE_JS,
     ),
-    ("echo", SKILL_ECHO_JS),
-    ("error", SKILL_ERROR_JS),
-    ("compose", SKILL_COMPOSE_JS),
+    ("echo", SKILL_ECHO_JS, SCHEMA_ECHO_JS),
+    ("error", SKILL_ERROR_JS, SCHEMA_ERROR_JS),
+    ("compose", SKILL_COMPOSE_JS, SCHEMA_COMPOSE_JS),
 ];
 
-fn lookup_builtin_skill(name: &str) -> Option<&'static str> {
+fn lookup_builtin_skill(name: &str) -> Option<(&'static str, &'static str)> {
     BUILTIN_SKILLS
         .iter()
-        .find(|(n, _)| *n == name)
-        .map(|(_, src)| *src)
+        .find(|(n, _, _)| *n == name)
+        .map(|(_, src, schema)| (*src, *schema))
 }
 
 fn trace_enabled() -> bool {
@@ -119,6 +134,7 @@ struct SkillState {
     ctx: WasiCtx,
     table: ResourceTable,
     skill_source: String,
+    schema_source: String,
     profile: Profile,
     llm_config: Option<LlmConfig>,
     engine: Engine,
@@ -138,6 +154,12 @@ impl WasiView for SkillState {
 impl SkillLoaderHost for SkillState {
     fn get_source(&mut self) -> wasmtime::Result<String> {
         Ok(self.skill_source.clone())
+    }
+}
+
+impl SchemaLoaderHost for SkillState {
+    fn get_schema_source(&mut self) -> wasmtime::Result<String> {
+        Ok(self.schema_source.clone())
     }
 }
 
@@ -190,7 +212,7 @@ impl InvokeHost for SkillState {
                 stack: None,
             }));
         }
-        let source = match lookup_builtin_skill(&skill_name) {
+        let (source, schema_source) = match lookup_builtin_skill(&skill_name) {
             Some(s) => s,
             None => {
                 return Ok(Err(SkillError {
@@ -210,6 +232,7 @@ impl InvokeHost for SkillState {
             &component,
             &linker,
             source.to_string(),
+            schema_source.to_string(),
             Profile::Builtin,
             llm_config,
             next_depth,
@@ -366,6 +389,7 @@ fn instantiate(
     component: &Component,
     linker: &Linker<SkillState>,
     skill_source: String,
+    schema_source: String,
     profile: Profile,
     llm_config: Option<LlmConfig>,
     depth: usize,
@@ -374,6 +398,7 @@ fn instantiate(
         ctx: WasiCtxBuilder::new().inherit_stdio().build(),
         table: ResourceTable::new(),
         skill_source,
+        schema_source,
         profile,
         llm_config,
         engine: engine.clone(),
@@ -398,6 +423,9 @@ fn run_skill_run(
 
     let source = fs::read_to_string(skill_path)
         .with_context(|| format!("failed to read skill source: {}", skill_path.display()))?;
+    let schema_path = schema_path_for(skill_path);
+    let schema_source = fs::read_to_string(&schema_path)
+        .with_context(|| format!("failed to read schema source: {}", schema_path.display()))?;
 
     let component = deserialize_runtime_component(engine)?;
     let linker = build_linker(engine)?;
@@ -406,10 +434,19 @@ fn run_skill_run(
         &component,
         &linker,
         source,
+        schema_source,
         Profile::User,
         Some(LlmConfig { model, api_key }),
         0,
     )?;
+
+    let schema_started = Instant::now();
+    let schema_result = runtime.call_get_schema(&mut store)?;
+    log_trace("get-schema() (incl. schema load)", schema_started);
+    if let Err(err) = schema_result {
+        print_skill_error(&err);
+        std::process::exit(1);
+    }
 
     let started = Instant::now();
     let r = runtime.call_run(&mut store, &args_json)?;
@@ -429,9 +466,18 @@ fn run_skill_run(
     Ok(())
 }
 
+fn schema_path_for(skill_path: &PathBuf) -> PathBuf {
+    skill_path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(PathBuf::new)
+        .join("schema.js")
+}
+
 fn run_builtin_skill(
     engine: &Engine,
     skill_source: &str,
+    schema_source: &str,
     args_json: &str,
 ) -> Result<std::result::Result<String, SkillError>> {
     let component = deserialize_runtime_component(engine)?;
@@ -441,6 +487,7 @@ fn run_builtin_skill(
         &component,
         &linker,
         skill_source.to_string(),
+        schema_source.to_string(),
         Profile::Builtin,
         None,
         0,
@@ -460,7 +507,7 @@ fn run_generate(
     let api_key = env::var("ANTHROPIC_API_KEY")
         .context("ANTHROPIC_API_KEY environment variable is required")?;
 
-    let (skill_source, args_json) = match signature_file {
+    let (skill_source, schema_source, args_json) = match signature_file {
         Some(path) => {
             let signature = match load_signature_value(path) {
                 Ok(sig) => sig,
@@ -475,7 +522,11 @@ fn run_generate(
                 "model": model,
                 "apiKey": api_key,
             });
-            (SKILL_GENERATE_CODE_FROM_SIGNATURE_JS, args.to_string())
+            (
+                SKILL_GENERATE_CODE_FROM_SIGNATURE_JS,
+                SCHEMA_GENERATE_CODE_FROM_SIGNATURE_JS,
+                args.to_string(),
+            )
         }
         None => {
             let args = serde_json::json!({
@@ -483,11 +534,15 @@ fn run_generate(
                 "model": model,
                 "apiKey": api_key,
             });
-            (SKILL_GENERATE_CODE_JS, args.to_string())
+            (
+                SKILL_GENERATE_CODE_JS,
+                SCHEMA_GENERATE_CODE_JS,
+                args.to_string(),
+            )
         }
     };
 
-    let r = run_builtin_skill(engine, skill_source, &args_json)?;
+    let r = run_builtin_skill(engine, skill_source, schema_source, &args_json)?;
     match r {
         Ok(json) => print_generated(&json)?,
         Err(err) => {
@@ -551,7 +606,12 @@ fn run_interpret(engine: &Engine, prompt: &str, model: &str) -> Result<()> {
         "apiKey": api_key,
     });
 
-    let r = run_builtin_skill(engine, SKILL_INTERPRET_JS, &args.to_string())?;
+    let r = run_builtin_skill(
+        engine,
+        SKILL_INTERPRET_JS,
+        SCHEMA_INTERPRET_JS,
+        &args.to_string(),
+    )?;
     match r {
         Ok(json) => print_interpreted(&json)?,
         Err(err) => {

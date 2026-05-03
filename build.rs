@@ -13,15 +13,16 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed={}", runtime_wasm.display());
     for skill in [
-        "agent/dist/skills/call-llm.js",
-        "agent/dist/skills/interpret.js",
-        "agent/dist/skills/generate-code.js",
-        "agent/dist/skills/generate-code-from-signature.js",
-        "agent/dist/skills/echo.js",
-        "agent/dist/skills/error.js",
-        "agent/dist/skills/compose.js",
+        "call-llm",
+        "interpret",
+        "generate-code",
+        "generate-code-from-signature",
+        "echo",
+        "error",
+        "compose",
     ] {
-        println!("cargo:rerun-if-changed={skill}");
+        println!("cargo:rerun-if-changed=agent/dist/skills/{skill}/skill.js");
+        println!("cargo:rerun-if-changed=agent/dist/skills/{skill}/schema.js");
     }
 
     let config = Config::new();

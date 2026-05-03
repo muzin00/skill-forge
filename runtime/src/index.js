@@ -1,4 +1,5 @@
 import { getSource } from 'skill-forge:runtime/skill-loader-host';
+import { getSchemaSource } from 'skill-forge:runtime/schema-loader-host';
 import { callLlm as hostCallLlm } from 'skill-forge:runtime/llm-host';
 import { execCmd as hostExecCmd } from 'skill-forge:runtime/exec-host';
 import { messages as hostAnthropicMessages } from 'skill-forge:runtime/anthropic-host';
@@ -32,6 +33,7 @@ globalThis.invokeSkill = async function invokeSkill(name, input) {
 };
 
 let __registered__;
+let __registered_schema__;
 
 Object.defineProperty(globalThis, 'defineSkill', {
   value: function defineSkill(runFn) {
@@ -50,7 +52,26 @@ Object.defineProperty(globalThis, 'defineSkill', {
   configurable: false,
 });
 
+Object.defineProperty(globalThis, 'defineSchema', {
+  value: function defineSchema(schema) {
+    if (schema === null || typeof schema !== 'object' || Array.isArray(schema)) {
+      const got = schema === null ? 'null' : Array.isArray(schema) ? 'array' : typeof schema;
+      throw skillError(
+        'runtime-error',
+        `defineSchema argument must be an object, got ${got}`,
+      );
+    }
+    if (__registered_schema__ !== undefined) {
+      throw skillError('runtime-error', 'defineSchema called more than once');
+    }
+    __registered_schema__ = schema;
+  },
+  writable: false,
+  configurable: false,
+});
+
 let skillModule = null;
+let schemaModule = null;
 
 function loadSkill() {
   if (skillModule !== null) return skillModule;
@@ -69,6 +90,25 @@ function loadSkill() {
 
   skillModule = { run: __registered__ };
   return skillModule;
+}
+
+function loadSchema() {
+  if (schemaModule !== null) return schemaModule;
+
+  __registered_schema__ = undefined;
+  const src = getSchemaSource();
+  const factory = new Function(src);
+  factory();
+
+  if (__registered_schema__ === undefined) {
+    throw skillError(
+      'runtime-error',
+      'skill must call defineSchema({ ... }) at top level of schema.js',
+    );
+  }
+
+  schemaModule = { schema: __registered_schema__ };
+  return schemaModule;
 }
 
 function skillError(code, message, stack) {
@@ -139,6 +179,36 @@ export async function run(argsJson) {
     throw {
       code: 'runtime-error',
       message: 'result is not JSON-serializable (undefined)',
+      stack: undefined,
+    };
+  }
+
+  return json;
+}
+
+export function getSchema() {
+  let mod;
+  try {
+    mod = loadSchema();
+  } catch (e) {
+    rethrow(e, 'runtime-error');
+  }
+
+  let json;
+  try {
+    json = JSON.stringify(mod.schema);
+  } catch (e) {
+    throw {
+      code: 'runtime-error',
+      message: `failed to stringify schema: ${e?.message ?? String(e)}`,
+      stack: e?.stack ?? undefined,
+    };
+  }
+
+  if (json === undefined) {
+    throw {
+      code: 'runtime-error',
+      message: 'schema is not JSON-serializable',
       stack: undefined,
     };
   }

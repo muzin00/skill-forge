@@ -1,0 +1,1 @@
+defineSkill(async (input) => input);

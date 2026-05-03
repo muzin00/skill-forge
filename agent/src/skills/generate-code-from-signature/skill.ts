@@ -2,7 +2,7 @@ import {
   generateCodeFromSignature,
   type Generated,
   type SignatureEntry,
-} from '../lib/codegen.js';
+} from '../../lib/codegen.js';
 
 interface GenerateCodeFromSignatureInput {
   prompt: string;
