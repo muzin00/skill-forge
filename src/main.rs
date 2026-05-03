@@ -18,9 +18,10 @@ bindgen!({
 
 use skill_forge::runtime::anthropic_host::Host as AnthropicHost;
 use skill_forge::runtime::exec_host::Host as ExecHost;
+use skill_forge::runtime::invoke_host::Host as InvokeHost;
 use skill_forge::runtime::llm_host::Host as LlmHost;
 use skill_forge::runtime::skill_loader_host::Host as SkillLoaderHost;
-use skill_forge::runtime::types::Host as TypesHost;
+use skill_forge::runtime::types::{ErrorCode, Host as TypesHost};
 
 const RUNTIME_CWASM: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/skill-runtime.cwasm"));
 
@@ -30,6 +31,31 @@ const SKILL_INTERPRET_JS: &str = include_str!("../agent/dist/skills/interpret.js
 const SKILL_GENERATE_CODE_JS: &str = include_str!("../agent/dist/skills/generate-code.js");
 const SKILL_GENERATE_CODE_FROM_SIGNATURE_JS: &str =
     include_str!("../agent/dist/skills/generate-code-from-signature.js");
+const SKILL_ECHO_JS: &str = include_str!("../agent/dist/skills/echo.js");
+const SKILL_ERROR_JS: &str = include_str!("../agent/dist/skills/error.js");
+const SKILL_COMPOSE_JS: &str = include_str!("../agent/dist/skills/compose.js");
+
+const MAX_INVOKE_DEPTH: usize = 8;
+
+const BUILTIN_SKILLS: &[(&str, &str)] = &[
+    ("call-llm", SKILL_CALL_LLM_JS),
+    ("interpret", SKILL_INTERPRET_JS),
+    ("generate-code", SKILL_GENERATE_CODE_JS),
+    (
+        "generate-code-from-signature",
+        SKILL_GENERATE_CODE_FROM_SIGNATURE_JS,
+    ),
+    ("echo", SKILL_ECHO_JS),
+    ("error", SKILL_ERROR_JS),
+    ("compose", SKILL_COMPOSE_JS),
+];
+
+fn lookup_builtin_skill(name: &str) -> Option<&'static str> {
+    BUILTIN_SKILLS
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, src)| *src)
+}
 
 fn trace_enabled() -> bool {
     env::var("SKILL_FORGE_TRACE")
@@ -80,9 +106,10 @@ enum Command {
 #[derive(Copy, Clone, Eq, PartialEq)]
 enum Profile {
     User,
-    Trusted,
+    Builtin,
 }
 
+#[derive(Clone)]
 struct LlmConfig {
     model: String,
     api_key: String,
@@ -94,6 +121,9 @@ struct SkillState {
     skill_source: String,
     profile: Profile,
     llm_config: Option<LlmConfig>,
+    engine: Engine,
+    component: Component,
+    depth: usize,
 }
 
 impl WasiView for SkillState {
@@ -146,13 +176,59 @@ impl ExecHost for SkillState {
     }
 }
 
+impl InvokeHost for SkillState {
+    fn invoke(
+        &mut self,
+        skill_name: String,
+        args_json: String,
+    ) -> wasmtime::Result<std::result::Result<String, SkillError>> {
+        let next_depth = self.depth + 1;
+        if next_depth > MAX_INVOKE_DEPTH {
+            return Ok(Err(SkillError {
+                code: ErrorCode::DepthExceeded,
+                message: format!("depth-exceeded: invoke depth limit {MAX_INVOKE_DEPTH} exceeded"),
+                stack: None,
+            }));
+        }
+        let source = match lookup_builtin_skill(&skill_name) {
+            Some(s) => s,
+            None => {
+                return Ok(Err(SkillError {
+                    code: ErrorCode::CapabilityDenied,
+                    message: format!("capability-denied: unknown skill: {skill_name}"),
+                    stack: None,
+                }));
+            }
+        };
+        let engine = self.engine.clone();
+        let component = self.component.clone();
+        let llm_config = self.llm_config.clone();
+        let linker = build_linker(&engine)
+            .map_err(|e| anyhow::anyhow!("failed to build linker for invoke: {e}"))?;
+        let (mut store, runtime) = instantiate(
+            &engine,
+            &component,
+            &linker,
+            source.to_string(),
+            Profile::Builtin,
+            llm_config,
+            next_depth,
+        )
+        .map_err(|e| anyhow::anyhow!("failed to instantiate skill for invoke: {e}"))?;
+        let started = Instant::now();
+        let r = runtime.call_run(&mut store, &args_json)?;
+        log_trace("invoke run()", started);
+        Ok(r)
+    }
+}
+
 impl AnthropicHost for SkillState {
     fn messages(
         &mut self,
         body_json: String,
         api_key: String,
     ) -> wasmtime::Result<std::result::Result<String, String>> {
-        if self.profile != Profile::Trusted {
+        if self.profile != Profile::Builtin {
             return Err(anyhow::anyhow!(
                 "capability-denied: anthropic-host is not available to user skills"
             ));
@@ -292,6 +368,7 @@ fn instantiate(
     skill_source: String,
     profile: Profile,
     llm_config: Option<LlmConfig>,
+    depth: usize,
 ) -> Result<(Store<SkillState>, SkillRuntime)> {
     let state = SkillState {
         ctx: WasiCtxBuilder::new().inherit_stdio().build(),
@@ -299,6 +376,9 @@ fn instantiate(
         skill_source,
         profile,
         llm_config,
+        engine: engine.clone(),
+        component: component.clone(),
+        depth,
     };
     let mut store = Store::new(engine, state);
     let started = Instant::now();
@@ -328,6 +408,7 @@ fn run_skill_run(
         source,
         Profile::User,
         Some(LlmConfig { model, api_key }),
+        0,
     )?;
 
     let started = Instant::now();
@@ -348,7 +429,7 @@ fn run_skill_run(
     Ok(())
 }
 
-fn run_trusted_skill(
+fn run_builtin_skill(
     engine: &Engine,
     skill_source: &str,
     args_json: &str,
@@ -360,12 +441,13 @@ fn run_trusted_skill(
         &component,
         &linker,
         skill_source.to_string(),
-        Profile::Trusted,
+        Profile::Builtin,
         None,
+        0,
     )?;
     let started = Instant::now();
     let r = runtime.call_run(&mut store, args_json)?;
-    log_trace("trusted run()", started);
+    log_trace("builtin run()", started);
     Ok(r)
 }
 
@@ -405,7 +487,7 @@ fn run_generate(
         }
     };
 
-    let r = run_trusted_skill(engine, skill_source, &args_json)?;
+    let r = run_builtin_skill(engine, skill_source, &args_json)?;
     match r {
         Ok(json) => print_generated(&json)?,
         Err(err) => {
@@ -419,7 +501,7 @@ fn run_generate(
 
 fn print_generated(json: &str) -> Result<()> {
     let v: serde_json::Value = serde_json::from_str(json)
-        .with_context(|| format!("failed to parse trusted skill output as JSON: {json}"))?;
+        .with_context(|| format!("failed to parse builtin skill output as JSON: {json}"))?;
     let code = v.get("code").and_then(|c| c.as_str()).unwrap_or("");
     let capabilities = v
         .get("capabilities")
@@ -469,7 +551,7 @@ fn run_interpret(engine: &Engine, prompt: &str, model: &str) -> Result<()> {
         "apiKey": api_key,
     });
 
-    let r = run_trusted_skill(engine, SKILL_INTERPRET_JS, &args.to_string())?;
+    let r = run_builtin_skill(engine, SKILL_INTERPRET_JS, &args.to_string())?;
     match r {
         Ok(json) => print_interpreted(&json)?,
         Err(err) => {
@@ -483,7 +565,7 @@ fn run_interpret(engine: &Engine, prompt: &str, model: &str) -> Result<()> {
 
 fn print_interpreted(json: &str) -> Result<()> {
     let v: serde_json::Value = serde_json::from_str(json)
-        .with_context(|| format!("failed to parse trusted skill output as JSON: {json}"))?;
+        .with_context(|| format!("failed to parse builtin skill output as JSON: {json}"))?;
     let final_answer = v.get("finalAnswer").and_then(|c| c.as_str()).unwrap_or("");
     let signature = v
         .get("signature")

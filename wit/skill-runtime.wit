@@ -14,6 +14,7 @@ interface types {
     network-error,
     fs-error,
     user-error,
+    depth-exceeded,
   }
 }
 
@@ -33,6 +34,11 @@ interface anthropic-host {
   messages: func(body-json: string, api-key: string) -> result<string, string>;
 }
 
+interface invoke-host {
+  use types.{skill-error};
+  invoke: func(skill-name: string, args-json: string) -> result<string, skill-error>;
+}
+
 world skill-runtime {
   use types.{skill-error};
 
@@ -40,6 +46,7 @@ world skill-runtime {
   import llm-host;
   import exec-host;
   import anthropic-host;
+  import invoke-host;
 
   export run: func(args-json: string) -> result<string, skill-error>;
 }

@@ -2,6 +2,7 @@ import { getSource } from 'skill-forge:runtime/skill-loader-host';
 import { callLlm as hostCallLlm } from 'skill-forge:runtime/llm-host';
 import { execCmd as hostExecCmd } from 'skill-forge:runtime/exec-host';
 import { messages as hostAnthropicMessages } from 'skill-forge:runtime/anthropic-host';
+import { invoke as hostInvoke } from 'skill-forge:runtime/invoke-host';
 
 globalThis.callLlm = async function callLlm(prompt, input) {
   return hostCallLlm(prompt, JSON.stringify(input ?? {}));
@@ -13,6 +14,21 @@ globalThis.execCmd = async function execCmd(cmd, args) {
 
 globalThis.anthropicMessages = function anthropicMessages(bodyJson, apiKey) {
   return hostAnthropicMessages(bodyJson, apiKey);
+};
+
+globalThis.invokeSkill = async function invokeSkill(name, input) {
+  const argsJson = JSON.stringify(input ?? {});
+  let resultJson;
+  try {
+    resultJson = hostInvoke(name, argsJson);
+  } catch (e) {
+    const payload = e?.payload ?? {};
+    const err = new Error(payload.message ?? e?.message ?? String(e));
+    err.code = payload.code;
+    if (payload.stack) err.stack = payload.stack;
+    throw err;
+  }
+  return JSON.parse(resultJson);
 };
 
 let __registered__;
