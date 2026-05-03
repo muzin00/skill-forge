@@ -1,0 +1,8 @@
+defineSchema({
+  type: 'object',
+  properties: {
+    color: { type: 'string', enum: ['red', 'green', 'blue'] },
+  },
+  required: ['color'],
+  additionalProperties: false,
+});

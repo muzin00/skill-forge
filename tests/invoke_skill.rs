@@ -9,7 +9,7 @@ fn run_fixture(name: &str) -> std::process::Output {
     Command::new(bin)
         .args(["run", "--skill"])
         .arg(&fixture)
-        .args(["--args", "{}", "--model", "claude-haiku-4-5-20251001"])
+        .args(["--model", "claude-haiku-4-5-20251001"])
         .env("ANTHROPIC_API_KEY", "dummy-not-used-by-this-test")
         .output()
         .expect("failed to run skill-forge")
