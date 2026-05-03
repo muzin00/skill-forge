@@ -5,7 +5,7 @@ use std::process::Command;
 fn user_skill_traps_when_calling_anthropic_messages() {
     let bin = env!("CARGO_BIN_EXE_skill-forge");
     let fixture =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/anthropic-trap.js");
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/anthropic-trap/skill.js");
 
     let output = Command::new(bin)
         .args(["run", "--skill"])

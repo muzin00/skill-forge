@@ -4,7 +4,7 @@ use std::process::Command;
 fn run_fixture(name: &str) -> std::process::Output {
     let bin = env!("CARGO_BIN_EXE_skill-forge");
     let fixture =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("tests/fixtures/{name}"));
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("tests/fixtures/{name}/skill.js"));
 
     Command::new(bin)
         .args(["run", "--skill"])
@@ -17,7 +17,7 @@ fn run_fixture(name: &str) -> std::process::Output {
 
 #[test]
 fn invoke_skill_covers_all_evaluation_axes() {
-    let out = run_fixture("invoke-multiple-skills.js");
+    let out = run_fixture("invoke-multiple-skills");
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(

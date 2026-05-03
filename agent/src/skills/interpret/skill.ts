@@ -1,4 +1,4 @@
-import { interpret, type Interpreted } from '../lib/interpret.js';
+import { interpret, type Interpreted } from '../../lib/interpret.js';
 
 interface InterpretInput {
   prompt: string;

@@ -1,4 +1,4 @@
-import { generateCode, type Generated } from '../lib/codegen.js';
+import { generateCode, type Generated } from '../../lib/codegen.js';
 
 interface GenerateCodeInput {
   prompt: string;

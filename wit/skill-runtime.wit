@@ -22,6 +22,10 @@ interface skill-loader-host {
   get-source: func() -> string;
 }
 
+interface schema-loader-host {
+  get-schema-source: func() -> string;
+}
+
 interface llm-host {
   call-llm: func(prompt: string, input-json: string) -> result<string, string>;
 }
@@ -43,10 +47,12 @@ world skill-runtime {
   use types.{skill-error};
 
   import skill-loader-host;
+  import schema-loader-host;
   import llm-host;
   import exec-host;
   import anthropic-host;
   import invoke-host;
 
   export run: func(args-json: string) -> result<string, skill-error>;
+  export get-schema: func() -> result<string, skill-error>;
 }

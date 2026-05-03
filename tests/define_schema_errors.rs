@@ -15,7 +15,7 @@ fn run_fixture(name: &str) -> std::process::Output {
         .expect("failed to run skill-forge")
 }
 
-fn assert_stderr_contains(out: &std::process::Output, needle: &str) {
+fn assert_failure_with(out: &std::process::Output, needle: &str) {
     let stderr = String::from_utf8_lossy(&out.stderr);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
@@ -29,22 +29,28 @@ fn assert_stderr_contains(out: &std::process::Output, needle: &str) {
 }
 
 #[test]
-fn skill_without_define_skill_call_reports_specific_error() {
-    let out = run_fixture("define-skill-not-called");
-    assert_stderr_contains(
+fn schema_without_define_schema_call_reports_specific_error() {
+    let out = run_fixture("define-schema-not-called");
+    assert_failure_with(
         &out,
-        "skill must call defineSkill(async (input) => { ... }) at top level",
+        "skill must call defineSchema({ ... }) at top level of schema.js",
     );
 }
 
 #[test]
-fn define_skill_with_non_function_reports_specific_error() {
-    let out = run_fixture("define-skill-not-a-function");
-    assert_stderr_contains(&out, "defineSkill argument must be a function");
+fn define_schema_with_non_object_reports_specific_error() {
+    let out = run_fixture("define-schema-not-an-object");
+    assert_failure_with(&out, "defineSchema argument must be an object");
 }
 
 #[test]
-fn define_skill_called_twice_reports_specific_error() {
-    let out = run_fixture("define-skill-called-twice");
-    assert_stderr_contains(&out, "defineSkill called more than once");
+fn define_schema_called_twice_reports_specific_error() {
+    let out = run_fixture("define-schema-called-twice");
+    assert_failure_with(&out, "defineSchema called more than once");
+}
+
+#[test]
+fn missing_schema_file_reports_failure() {
+    let out = run_fixture("schema-file-missing");
+    assert_failure_with(&out, "failed to read schema source");
 }
