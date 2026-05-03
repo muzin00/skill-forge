@@ -1,5 +1,6 @@
 use std::env;
 use std::fs;
+use std::io::{self, IsTerminal, Read};
 use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::time::Instant;
@@ -11,6 +12,7 @@ use wasmtime::{Config, Engine, Store};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiView};
 
 mod skill_args;
+mod validator;
 
 bindgen!({
     path: "wit",
@@ -443,16 +445,9 @@ fn run_skill_run(engine: &Engine, raw_argv: Vec<String>) -> Result<()> {
         }
     };
 
-    let schema_value: serde_json::Value = serde_json::from_str(&schema_json)
-        .with_context(|| format!("failed to parse schema JSON: {schema_json}"))?;
+    let (input_schema, output_schema) = parse_schema_envelope(&schema_json)?;
 
-    let args_json = match skill_args::build_args_json(&schema_value, &skill_flag_argv) {
-        Ok(json) => json,
-        Err(msg) => {
-            eprintln!("{msg}");
-            std::process::exit(2);
-        }
-    };
+    let args_json = build_input_args_json(&input_schema, &skill_flag_argv)?;
 
     let started = Instant::now();
     let r = runtime.call_run(&mut store, &args_json)?;
@@ -462,7 +457,22 @@ fn run_skill_run(engine: &Engine, raw_argv: Vec<String>) -> Result<()> {
     );
 
     match r {
-        Ok(json) => println!("{json}"),
+        Ok(json) => {
+            if let Some(schema) = output_schema.as_ref() {
+                let value: serde_json::Value = match serde_json::from_str(&json) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        eprintln!("output validation: invalid JSON from skill: {e}");
+                        std::process::exit(1);
+                    }
+                };
+                if let Err(msg) = validator::validate_output(&value, schema) {
+                    eprintln!("{msg}");
+                    std::process::exit(1);
+                }
+            }
+            println!("{json}");
+        }
         Err(err) => {
             print_skill_error(&err);
             std::process::exit(1);
@@ -470,6 +480,56 @@ fn run_skill_run(engine: &Engine, raw_argv: Vec<String>) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn parse_schema_envelope(
+    schema_json: &str,
+) -> Result<(serde_json::Value, Option<serde_json::Value>)> {
+    let envelope: serde_json::Value = serde_json::from_str(schema_json)
+        .with_context(|| format!("failed to parse schema JSON: {schema_json}"))?;
+    let input = envelope
+        .get("input")
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("schema envelope missing 'input': {schema_json}"))?;
+    let output = match envelope.get("output") {
+        Some(serde_json::Value::Null) | None => None,
+        Some(v) => Some(v.clone()),
+    };
+    Ok((input, output))
+}
+
+fn build_input_args_json(
+    input_schema: &serde_json::Value,
+    skill_flag_argv: &[String],
+) -> Result<String> {
+    let stdin_is_tty = io::stdin().is_terminal();
+    let result = if stdin_is_tty {
+        skill_args::build_args_json(input_schema, skill_flag_argv)
+    } else {
+        let mut buf = String::new();
+        io::stdin()
+            .read_to_string(&mut buf)
+            .context("failed to read stdin")?;
+        let stdin_value: serde_json::Value = if buf.trim().is_empty() {
+            serde_json::Value::Object(serde_json::Map::new())
+        } else {
+            match serde_json::from_str(&buf) {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("Error: stdin: invalid JSON: {e}");
+                    std::process::exit(2);
+                }
+            }
+        };
+        skill_args::build_args_json_with_stdin(input_schema, skill_flag_argv, &stdin_value)
+    };
+    match result {
+        Ok(json) => Ok(json),
+        Err(msg) => {
+            eprintln!("{msg}");
+            std::process::exit(2);
+        }
+    }
 }
 
 fn parse_run_argv(argv: Vec<String>) -> (PathBuf, String, Vec<String>) {
