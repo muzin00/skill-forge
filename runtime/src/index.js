@@ -53,18 +53,39 @@ Object.defineProperty(globalThis, 'defineSkill', {
 });
 
 Object.defineProperty(globalThis, 'defineSchema', {
-  value: function defineSchema(schema) {
-    if (schema === null || typeof schema !== 'object' || Array.isArray(schema)) {
-      const got = schema === null ? 'null' : Array.isArray(schema) ? 'array' : typeof schema;
+  value: function defineSchema(inputSchema, outputSchema) {
+    if (
+      inputSchema === null ||
+      typeof inputSchema !== 'object' ||
+      Array.isArray(inputSchema)
+    ) {
+      const got =
+        inputSchema === null
+          ? 'null'
+          : Array.isArray(inputSchema)
+            ? 'array'
+            : typeof inputSchema;
       throw skillError(
         'runtime-error',
         `defineSchema argument must be an object, got ${got}`,
       );
     }
+    if (outputSchema !== undefined && outputSchema !== null) {
+      if (typeof outputSchema !== 'object' || Array.isArray(outputSchema)) {
+        const got = Array.isArray(outputSchema) ? 'array' : typeof outputSchema;
+        throw skillError(
+          'runtime-error',
+          `defineSchema output argument must be an object, got ${got}`,
+        );
+      }
+    }
     if (__registered_schema__ !== undefined) {
       throw skillError('runtime-error', 'defineSchema called more than once');
     }
-    __registered_schema__ = schema;
+    __registered_schema__ = {
+      input: inputSchema,
+      output: outputSchema ?? null,
+    };
   },
   writable: false,
   configurable: false,

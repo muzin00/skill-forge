@@ -1,21 +1,50 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use serde_json::{Map, Value};
 
+use crate::validator::{self, camel_to_kebab, format_enum, format_value, kebab_to_camel};
+
 pub fn build_args_json(schema: &Value, argv: &[String]) -> Result<String, String> {
+    let mut map = parse_argv_to_partial(schema, argv)?;
+    apply_boolean_defaults(&mut map, schema);
+    let value = Value::Object(map);
+    validator::validate_input(&value, schema)?;
+    Ok(value.to_string())
+}
+
+pub fn build_args_json_with_stdin(
+    schema: &Value,
+    argv: &[String],
+    stdin: &Value,
+) -> Result<String, String> {
+    let argv_overrides = parse_argv_to_partial(schema, argv)?;
+    let mut map = match stdin {
+        Value::Object(o) => o.clone(),
+        Value::Null => Map::new(),
+        _ => {
+            return Err(format!(
+                "Error: stdin: expected JSON object, got {}",
+                format_value(stdin)
+            ));
+        }
+    };
+    for (k, v) in argv_overrides {
+        map.insert(k, v);
+    }
+    apply_boolean_defaults(&mut map, schema);
+    let value = Value::Object(map);
+    validator::validate_input(&value, schema)?;
+    Ok(value.to_string())
+}
+
+fn parse_argv_to_partial(
+    schema: &Value,
+    argv: &[String],
+) -> Result<Map<String, Value>, String> {
     let properties = schema
         .get("properties")
         .and_then(|p| p.as_object())
         .cloned()
-        .unwrap_or_default();
-    let required: Vec<String> = schema
-        .get("required")
-        .and_then(|r| r.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect()
-        })
         .unwrap_or_default();
     let additional_properties = schema
         .get("additionalProperties")
@@ -28,7 +57,6 @@ pub fn build_args_json(schema: &Value, argv: &[String]) -> Result<String, String
     }
 
     let mut result: Map<String, Value> = Map::new();
-    let mut seen: HashSet<String> = HashSet::new();
 
     let mut i = 0;
     while i < argv.len() {
@@ -39,7 +67,10 @@ pub fn build_args_json(schema: &Value, argv: &[String]) -> Result<String, String
         let flag = &token[2..];
 
         let (prop_name, prop_schema) = match flag_to_prop.get(flag) {
-            Some(name) => (name.clone(), properties.get(name).cloned().unwrap_or(Value::Null)),
+            Some(name) => (
+                name.clone(),
+                properties.get(name).cloned().unwrap_or(Value::Null),
+            ),
             None => {
                 if !additional_properties {
                     return Err(format!("Error: --{flag}: unknown flag"));
@@ -61,8 +92,7 @@ pub fn build_args_json(schema: &Value, argv: &[String]) -> Result<String, String
             .unwrap_or("string");
 
         if ty == "boolean" {
-            result.insert(prop_name.clone(), Value::Bool(true));
-            seen.insert(prop_name);
+            result.insert(prop_name, Value::Bool(true));
             i += 1;
             continue;
         }
@@ -93,12 +123,11 @@ pub fn build_args_json(schema: &Value, argv: &[String]) -> Result<String, String
                 ));
             }
             let arr = result
-                .entry(prop_name.clone())
+                .entry(prop_name)
                 .or_insert_with(|| Value::Array(vec![]));
             if let Some(a) = arr.as_array_mut() {
                 a.push(item);
             }
-            seen.insert(prop_name);
         } else {
             let parsed = parse_typed_value(&raw_value, ty, flag)?;
             if let Some(enum_values) = prop_schema.get("enum").and_then(|e| e.as_array())
@@ -110,28 +139,26 @@ pub fn build_args_json(schema: &Value, argv: &[String]) -> Result<String, String
                     format_value(&parsed)
                 ));
             }
-            result.insert(prop_name.clone(), parsed);
-            seen.insert(prop_name);
+            result.insert(prop_name, parsed);
         }
     }
 
-    for req in &required {
-        if !seen.contains(req) {
-            return Err(format!("Error: --{}: required", camel_to_kebab(req)));
-        }
-    }
+    Ok(result)
+}
 
-    for (prop_name, prop_schema) in &properties {
+fn apply_boolean_defaults(map: &mut Map<String, Value>, schema: &Value) {
+    let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) else {
+        return;
+    };
+    for (prop_name, prop_schema) in properties {
         let ty = prop_schema
             .get("type")
             .and_then(|t| t.as_str())
             .unwrap_or("string");
-        if ty == "boolean" && !seen.contains(prop_name) {
-            result.insert(prop_name.clone(), Value::Bool(false));
+        if ty == "boolean" && !map.contains_key(prop_name) {
+            map.insert(prop_name.clone(), Value::Bool(false));
         }
     }
-
-    Ok(Value::Object(result).to_string())
 }
 
 fn parse_typed_value(raw: &str, ty: &str, flag: &str) -> Result<Value, String> {
@@ -183,60 +210,8 @@ fn parse_typed_value(raw: &str, ty: &str, flag: &str) -> Result<Value, String> {
     }
 }
 
-fn camel_to_kebab(s: &str) -> String {
-    let mut out = String::new();
-    for (i, c) in s.chars().enumerate() {
-        if c.is_ascii_uppercase() {
-            if i > 0 {
-                out.push('-');
-            }
-            out.push(c.to_ascii_lowercase());
-        } else {
-            out.push(c);
-        }
-    }
-    out
-}
-
-fn kebab_to_camel(s: &str) -> String {
-    let mut out = String::new();
-    let mut upper_next = false;
-    for c in s.chars() {
-        if c == '-' {
-            upper_next = true;
-        } else if upper_next {
-            out.push(c.to_ascii_uppercase());
-            upper_next = false;
-        } else {
-            out.push(c);
-        }
-    }
-    out
-}
-
 fn format_raw(s: &str) -> String {
     format!("\"{s}\"")
-}
-
-fn format_value(v: &Value) -> String {
-    match v {
-        Value::String(s) => format!("\"{s}\""),
-        Value::Bool(b) => b.to_string(),
-        Value::Number(n) => n.to_string(),
-        Value::Null => "null".to_string(),
-        Value::Array(arr) => format!(
-            "[{}]",
-            arr.iter().map(format_value).collect::<Vec<_>>().join(", ")
-        ),
-        Value::Object(_) => "<object>".to_string(),
-    }
-}
-
-fn format_enum(values: &[Value]) -> String {
-    format!(
-        "[{}]",
-        values.iter().map(format_value).collect::<Vec<_>>().join(", ")
-    )
 }
 
 #[cfg(test)]
@@ -246,22 +221,6 @@ mod tests {
 
     fn s(v: &str) -> String {
         v.to_string()
-    }
-
-    #[test]
-    fn camel_to_kebab_basic() {
-        assert_eq!(camel_to_kebab("userName"), "user-name");
-        assert_eq!(camel_to_kebab("apiKey"), "api-key");
-        assert_eq!(camel_to_kebab("fooBar2Baz"), "foo-bar2-baz");
-        assert_eq!(camel_to_kebab("userName2"), "user-name2");
-        assert_eq!(camel_to_kebab("count"), "count");
-    }
-
-    #[test]
-    fn kebab_to_camel_basic() {
-        assert_eq!(kebab_to_camel("user-name"), "userName");
-        assert_eq!(kebab_to_camel("api-key"), "apiKey");
-        assert_eq!(kebab_to_camel("count"), "count");
     }
 
     #[test]
@@ -447,12 +406,101 @@ mod tests {
             "required": ["count", "ratio"],
             "additionalProperties": false
         });
-        // both invalid, but only first one should be reported
         let err = build_args_json(
             &schema,
             &[s("--count"), s("abc"), s("--ratio"), s("xyz")],
         )
         .unwrap_err();
         assert_eq!(err, "Error: --count: expected integer, got \"abc\"");
+    }
+
+    #[test]
+    fn stdin_provides_required_field_no_cli_flag() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "userName": { "type": "string" },
+                "count": { "type": "integer" }
+            },
+            "required": ["userName", "count"],
+            "additionalProperties": false
+        });
+        let stdin = json!({ "userName": "alice", "count": 7 });
+        let json_str = build_args_json_with_stdin(&schema, &[], &stdin).unwrap();
+        let v: Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(v, json!({ "userName": "alice", "count": 7 }));
+    }
+
+    #[test]
+    fn stdin_overridden_by_cli_flag() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "userName": { "type": "string" },
+                "count": { "type": "integer" }
+            },
+            "required": ["userName", "count"]
+        });
+        let stdin = json!({ "userName": "alice", "count": 7 });
+        let argv = vec![s("--user-name"), s("bob")];
+        let json_str = build_args_json_with_stdin(&schema, &argv, &stdin).unwrap();
+        let v: Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(v, json!({ "userName": "bob", "count": 7 }));
+    }
+
+    #[test]
+    fn stdin_violates_input_schema_type() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "count": { "type": "integer" }
+            },
+            "required": ["count"]
+        });
+        let stdin = json!({ "count": "not-a-number" });
+        let err = build_args_json_with_stdin(&schema, &[], &stdin).unwrap_err();
+        assert_eq!(
+            err,
+            "Error: --count: expected integer, got \"not-a-number\""
+        );
+    }
+
+    #[test]
+    fn stdin_missing_required_after_merge() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "userName": { "type": "string" },
+                "count": { "type": "integer" }
+            },
+            "required": ["userName", "count"]
+        });
+        let stdin = json!({ "userName": "alice" });
+        let err = build_args_json_with_stdin(&schema, &[], &stdin).unwrap_err();
+        assert_eq!(err, "Error: --count: required");
+    }
+
+    #[test]
+    fn stdin_empty_object_uses_cli_flags_only() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "userName": { "type": "string" }
+            },
+            "required": ["userName"]
+        });
+        let stdin = json!({});
+        let argv = vec![s("--user-name"), s("alice")];
+        let json_str = build_args_json_with_stdin(&schema, &argv, &stdin).unwrap();
+        let v: Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(v, json!({ "userName": "alice" }));
+    }
+
+    #[test]
+    fn stdin_non_object_rejected() {
+        let schema = json!({ "type": "object", "properties": {} });
+        let stdin = json!([1, 2, 3]);
+        let err = build_args_json_with_stdin(&schema, &[], &stdin).unwrap_err();
+        assert_eq!(err, "Error: stdin: expected JSON object, got [1, 2, 3]");
     }
 }
