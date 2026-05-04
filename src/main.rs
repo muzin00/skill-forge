@@ -107,6 +107,8 @@ enum Command {
         #[arg(long)]
         signature_file: Option<PathBuf>,
         #[arg(long, default_value_t = false)]
+        no_interpret: bool,
+        #[arg(long, default_value_t = false)]
         force: bool,
     },
     Interpret {
@@ -358,6 +360,7 @@ fn main() -> Result<()> {
             name,
             model,
             signature_file,
+            no_interpret,
             force,
         } => run_generate(
             &engine,
@@ -365,6 +368,7 @@ fn main() -> Result<()> {
             &name,
             &model,
             signature_file.as_ref(),
+            no_interpret,
             force,
         ),
         Command::Interpret { prompt, model } => run_interpret(&engine, &prompt, &model),
@@ -659,10 +663,15 @@ fn run_generate(
     name: &str,
     model: &str,
     signature_file: Option<&PathBuf>,
+    no_interpret: bool,
     force: bool,
 ) -> Result<()> {
     if let Err(msg) = validate_skill_name(name) {
         eprintln!("Error: --name: {msg}");
+        std::process::exit(2);
+    }
+    if let Err(msg) = validate_generate_flags(signature_file, no_interpret) {
+        eprintln!("Error: {msg}");
         std::process::exit(2);
     }
 
@@ -678,6 +687,47 @@ fn run_generate(
         std::process::exit(1);
     }
 
+    let signature: Option<serde_json::Value> = if let Some(path) = signature_file {
+        match load_signature_value(path) {
+            Ok(sig) => Some(sig),
+            Err(msg) => {
+                eprintln!("agent error: {msg}");
+                std::process::exit(1);
+            }
+        }
+    } else if no_interpret {
+        None
+    } else {
+        println!("interpreting prompt...");
+        let interpret_args = serde_json::json!({
+            "prompt": prompt,
+            "model": model,
+            "apiKey": api_key.clone(),
+        })
+        .to_string();
+        let r = run_builtin_skill(
+            engine,
+            SKILL_INTERPRET_JS,
+            SCHEMA_INTERPRET_JS,
+            &interpret_args,
+        )?;
+        let interpret_json = match r {
+            Ok(j) => j,
+            Err(err) => {
+                eprintln!("agent error: [{:?}] {}", err.code, err.message);
+                std::process::exit(1);
+            }
+        };
+        match extract_signature_from_interpret_output(&interpret_json) {
+            Ok(sig) => Some(sig),
+            Err(msg) => {
+                eprintln!("agent error: {msg}");
+                std::process::exit(1);
+            }
+        }
+    };
+
+    println!("generating skill code...");
     let mut args = serde_json::Map::new();
     args.insert(
         "prompt".to_string(),
@@ -688,15 +738,8 @@ fn run_generate(
         serde_json::Value::String(model.to_string()),
     );
     args.insert("apiKey".to_string(), serde_json::Value::String(api_key));
-    if let Some(path) = signature_file {
-        let signature = match load_signature_value(path) {
-            Ok(sig) => sig,
-            Err(msg) => {
-                eprintln!("agent error: {msg}");
-                std::process::exit(1);
-            }
-        };
-        args.insert("signature".to_string(), signature);
+    if let Some(sig) = signature {
+        args.insert("signature".to_string(), sig);
     }
     let args_json = serde_json::Value::Object(args).to_string();
 
@@ -818,12 +861,8 @@ fn print_generate_summary(skill_dir: &Path, capabilities: &[String], name: &str,
     println!("run with: skill-forge run {name} --model {model}");
 }
 
-fn load_signature_value(path: &PathBuf) -> std::result::Result<serde_json::Value, String> {
-    let content = fs::read_to_string(path)
-        .map_err(|e| format!("failed to read signature file {}: {e}", path.display()))?;
-    let parsed: serde_json::Value = serde_json::from_str(&content)
-        .map_err(|e| format!("parse-error: invalid JSON in signature file: {e}"))?;
-    let array = parsed
+fn validate_signature_array(value: &serde_json::Value) -> std::result::Result<(), String> {
+    let array = value
         .as_array()
         .ok_or_else(|| "parse-error: signature root is not an array".to_string())?;
     for (i, entry) in array.iter().enumerate() {
@@ -838,7 +877,39 @@ fn load_signature_value(path: &PathBuf) -> std::result::Result<serde_json::Value
             }
         }
     }
+    Ok(())
+}
+
+fn load_signature_value(path: &PathBuf) -> std::result::Result<serde_json::Value, String> {
+    let content = fs::read_to_string(path)
+        .map_err(|e| format!("failed to read signature file {}: {e}", path.display()))?;
+    let parsed: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| format!("parse-error: invalid JSON in signature file: {e}"))?;
+    validate_signature_array(&parsed)?;
     Ok(parsed)
+}
+
+fn extract_signature_from_interpret_output(
+    json: &str,
+) -> std::result::Result<serde_json::Value, String> {
+    let parsed: serde_json::Value = serde_json::from_str(json)
+        .map_err(|e| format!("parse-error: failed to parse interpret output as JSON: {e}"))?;
+    let signature = parsed
+        .get("signature")
+        .cloned()
+        .ok_or_else(|| "parse-error: interpret output missing 'signature' field".to_string())?;
+    validate_signature_array(&signature)?;
+    Ok(signature)
+}
+
+fn validate_generate_flags(
+    signature_file: Option<&PathBuf>,
+    no_interpret: bool,
+) -> std::result::Result<(), String> {
+    if signature_file.is_some() && no_interpret {
+        return Err("--signature-file and --no-interpret are mutually exclusive".to_string());
+    }
+    Ok(())
 }
 
 fn run_interpret(engine: &Engine, prompt: &str, model: &str) -> Result<()> {
@@ -994,5 +1065,112 @@ mod tests {
         assert!(schema_js.contains("\"userName\""));
         assert!(schema_js.contains("\"additionalProperties\": false"));
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn validate_generate_flags_accepts_only_signature_file() {
+        let path = PathBuf::from("/tmp/sig.json");
+        validate_generate_flags(Some(&path), false).unwrap();
+    }
+
+    #[test]
+    fn validate_generate_flags_accepts_only_no_interpret() {
+        validate_generate_flags(None, true).unwrap();
+    }
+
+    #[test]
+    fn validate_generate_flags_accepts_neither() {
+        validate_generate_flags(None, false).unwrap();
+    }
+
+    #[test]
+    fn validate_generate_flags_rejects_both() {
+        let path = PathBuf::from("/tmp/sig.json");
+        let err = validate_generate_flags(Some(&path), true).unwrap_err();
+        assert!(
+            err.contains("--signature-file") && err.contains("--no-interpret"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_signature_array_accepts_empty_array() {
+        validate_signature_array(&json!([])).unwrap();
+    }
+
+    #[test]
+    fn validate_signature_array_accepts_final_answer_only() {
+        let sig = json!([
+            {"tool": "finalAnswer", "input": "{\"result\":\"ok\"}", "output": ""}
+        ]);
+        validate_signature_array(&sig).unwrap();
+    }
+
+    #[test]
+    fn validate_signature_array_rejects_non_array() {
+        let err = validate_signature_array(&json!({"tool": "x"})).unwrap_err();
+        assert!(err.contains("not an array"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn validate_signature_array_rejects_non_object_entry() {
+        let err = validate_signature_array(&json!(["nope"])).unwrap_err();
+        assert!(err.contains("not an object"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn validate_signature_array_rejects_missing_field() {
+        let sig = json!([{"tool": "callLlm", "input": "{}"}]);
+        let err = validate_signature_array(&sig).unwrap_err();
+        assert!(err.contains("\"output\""), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn validate_signature_array_rejects_non_string_field() {
+        let sig = json!([{"tool": "callLlm", "input": "{}", "output": 1}]);
+        let err = validate_signature_array(&sig).unwrap_err();
+        assert!(err.contains("\"output\""), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn extract_signature_from_interpret_output_returns_signature_array() {
+        let json = json!({
+            "finalAnswer": "ok",
+            "signature": [
+                {"tool": "callLlm", "input": "{\"prompt\":\"p\"}", "output": "\"out\""},
+                {"tool": "finalAnswer", "input": "{\"result\":\"ok\"}", "output": ""}
+            ]
+        })
+        .to_string();
+        let sig = extract_signature_from_interpret_output(&json).unwrap();
+        let arr = sig.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0].get("tool").and_then(|v| v.as_str()), Some("callLlm"));
+    }
+
+    #[test]
+    fn extract_signature_from_interpret_output_errors_on_invalid_json() {
+        let err = extract_signature_from_interpret_output("not json").unwrap_err();
+        assert!(err.contains("parse-error"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn extract_signature_from_interpret_output_errors_when_signature_missing() {
+        let json = json!({"finalAnswer": "ok"}).to_string();
+        let err = extract_signature_from_interpret_output(&json).unwrap_err();
+        assert!(
+            err.contains("missing 'signature'"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn extract_signature_from_interpret_output_errors_on_invalid_entry_shape() {
+        let json = json!({
+            "signature": [{"tool": "callLlm"}]
+        })
+        .to_string();
+        let err = extract_signature_from_interpret_output(&json).unwrap_err();
+        assert!(err.contains("\"input\""), "unexpected error: {err}");
     }
 }
