@@ -4,8 +4,7 @@ import { mkdir } from 'node:fs/promises';
 const SKILLS = [
   'call-llm',
   'interpret',
-  'generate-code',
-  'generate-code-from-signature',
+  'generate-skill-code',
   'echo',
   'error',
   'compose',

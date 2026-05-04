@@ -15,8 +15,7 @@ fn main() {
     for skill in [
         "call-llm",
         "interpret",
-        "generate-code",
-        "generate-code-from-signature",
+        "generate-skill-code",
         "echo",
         "error",
         "compose",
@@ -32,11 +31,9 @@ fn main() {
 }
 
 fn precompile(engine: &Engine, src: &PathBuf, dst: &PathBuf) {
-    let bytes =
-        fs::read(src).unwrap_or_else(|e| panic!("failed to read {}: {e}", src.display()));
+    let bytes = fs::read(src).unwrap_or_else(|e| panic!("failed to read {}: {e}", src.display()));
     let cwasm = engine
         .precompile_component(&bytes)
         .unwrap_or_else(|e| panic!("failed to precompile {}: {e}", src.display()));
-    fs::write(dst, &cwasm)
-        .unwrap_or_else(|e| panic!("failed to write {}: {e}", dst.display()));
+    fs::write(dst, &cwasm).unwrap_or_else(|e| panic!("failed to write {}: {e}", dst.display()));
 }

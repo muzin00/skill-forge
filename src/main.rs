@@ -1,7 +1,7 @@
 use std::env;
 use std::fs;
 use std::io::{self, IsTerminal, Read};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::Instant;
 
@@ -33,18 +33,16 @@ const RUNTIME_CWASM: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/skill-run
 #[allow(dead_code)]
 const SKILL_CALL_LLM_JS: &str = include_str!("../agent/dist/skills/call-llm/skill.js");
 const SKILL_INTERPRET_JS: &str = include_str!("../agent/dist/skills/interpret/skill.js");
-const SKILL_GENERATE_CODE_JS: &str = include_str!("../agent/dist/skills/generate-code/skill.js");
-const SKILL_GENERATE_CODE_FROM_SIGNATURE_JS: &str =
-    include_str!("../agent/dist/skills/generate-code-from-signature/skill.js");
+const SKILL_GENERATE_SKILL_CODE_JS: &str =
+    include_str!("../agent/dist/skills/generate-skill-code/skill.js");
 const SKILL_ECHO_JS: &str = include_str!("../agent/dist/skills/echo/skill.js");
 const SKILL_ERROR_JS: &str = include_str!("../agent/dist/skills/error/skill.js");
 const SKILL_COMPOSE_JS: &str = include_str!("../agent/dist/skills/compose/skill.js");
 
 const SCHEMA_CALL_LLM_JS: &str = include_str!("../agent/dist/skills/call-llm/schema.js");
 const SCHEMA_INTERPRET_JS: &str = include_str!("../agent/dist/skills/interpret/schema.js");
-const SCHEMA_GENERATE_CODE_JS: &str = include_str!("../agent/dist/skills/generate-code/schema.js");
-const SCHEMA_GENERATE_CODE_FROM_SIGNATURE_JS: &str =
-    include_str!("../agent/dist/skills/generate-code-from-signature/schema.js");
+const SCHEMA_GENERATE_SKILL_CODE_JS: &str =
+    include_str!("../agent/dist/skills/generate-skill-code/schema.js");
 const SCHEMA_ECHO_JS: &str = include_str!("../agent/dist/skills/echo/schema.js");
 const SCHEMA_ERROR_JS: &str = include_str!("../agent/dist/skills/error/schema.js");
 const SCHEMA_COMPOSE_JS: &str = include_str!("../agent/dist/skills/compose/schema.js");
@@ -55,14 +53,9 @@ const BUILTIN_SKILLS: &[(&str, &str, &str)] = &[
     ("call-llm", SKILL_CALL_LLM_JS, SCHEMA_CALL_LLM_JS),
     ("interpret", SKILL_INTERPRET_JS, SCHEMA_INTERPRET_JS),
     (
-        "generate-code",
-        SKILL_GENERATE_CODE_JS,
-        SCHEMA_GENERATE_CODE_JS,
-    ),
-    (
-        "generate-code-from-signature",
-        SKILL_GENERATE_CODE_FROM_SIGNATURE_JS,
-        SCHEMA_GENERATE_CODE_FROM_SIGNATURE_JS,
+        "generate-skill-code",
+        SKILL_GENERATE_SKILL_CODE_JS,
+        SCHEMA_GENERATE_SKILL_CODE_JS,
     ),
     ("echo", SKILL_ECHO_JS, SCHEMA_ECHO_JS),
     ("error", SKILL_ERROR_JS, SCHEMA_ERROR_JS),
@@ -107,9 +100,13 @@ enum Command {
         #[arg(long)]
         prompt: String,
         #[arg(long)]
+        name: String,
+        #[arg(long)]
         model: String,
         #[arg(long)]
         signature_file: Option<PathBuf>,
+        #[arg(long, default_value_t = false)]
+        force: bool,
     },
     Interpret {
         #[arg(long)]
@@ -357,9 +354,18 @@ fn main() -> Result<()> {
         Command::Run { argv } => run_skill_run(&engine, argv),
         Command::Generate {
             prompt,
+            name,
             model,
             signature_file,
-        } => run_generate(&engine, &prompt, &model, signature_file.as_ref()),
+            force,
+        } => run_generate(
+            &engine,
+            &prompt,
+            &name,
+            &model,
+            signature_file.as_ref(),
+            force,
+        ),
         Command::Interpret { prompt, model } => run_interpret(&engine, &prompt, &model),
     }
 }
@@ -534,10 +540,17 @@ fn build_input_args_json(
 
 fn parse_run_argv(argv: Vec<String>) -> (PathBuf, String, Vec<String>) {
     let mut skill: Option<PathBuf> = None;
+    let mut name: Option<String> = None;
     let mut model: Option<String> = None;
     let mut skill_flags: Vec<String> = Vec::new();
 
     let mut i = 0;
+    if let Some(first) = argv.first()
+        && !first.starts_with("--")
+    {
+        name = Some(first.clone());
+        i = 1;
+    }
     while i < argv.len() {
         let token = &argv[i];
         match token.as_str() {
@@ -574,16 +587,37 @@ fn parse_run_argv(argv: Vec<String>) -> (PathBuf, String, Vec<String>) {
         }
     }
 
-    let skill = skill.unwrap_or_else(|| {
-        eprintln!("Error: --skill: required");
-        std::process::exit(2);
-    });
+    let skill_path = match (skill, name) {
+        (Some(_), Some(_)) => {
+            eprintln!("Error: <skill-name> and --skill are mutually exclusive");
+            std::process::exit(2);
+        }
+        (Some(path), None) => path,
+        (None, Some(n)) => {
+            if let Err(msg) = validate_skill_name(&n) {
+                eprintln!("Error: <skill-name>: {msg}");
+                std::process::exit(2);
+            }
+            match skill_dir_for_name(&n) {
+                Ok(dir) => dir.join("skill.js"),
+                Err(e) => {
+                    eprintln!("Error: <skill-name>: {e}");
+                    std::process::exit(2);
+                }
+            }
+        }
+        (None, None) => {
+            eprintln!("Error: <skill-name> or --skill: required");
+            std::process::exit(2);
+        }
+    };
+
     let model = model.unwrap_or_else(|| {
         eprintln!("Error: --model: required");
         std::process::exit(2);
     });
 
-    (skill, model, skill_flags)
+    (skill_path, model, skill_flags)
 }
 
 fn schema_path_for(skill_path: &PathBuf) -> PathBuf {
@@ -621,63 +655,105 @@ fn run_builtin_skill(
 fn run_generate(
     engine: &Engine,
     prompt: &str,
+    name: &str,
     model: &str,
     signature_file: Option<&PathBuf>,
+    force: bool,
 ) -> Result<()> {
+    if let Err(msg) = validate_skill_name(name) {
+        eprintln!("Error: --name: {msg}");
+        std::process::exit(2);
+    }
+
     let api_key = env::var("ANTHROPIC_API_KEY")
         .context("ANTHROPIC_API_KEY environment variable is required")?;
 
-    let (skill_source, schema_source, args_json) = match signature_file {
-        Some(path) => {
-            let signature = match load_signature_value(path) {
-                Ok(sig) => sig,
-                Err(msg) => {
-                    eprintln!("agent error: {msg}");
-                    std::process::exit(1);
-                }
-            };
-            let args = serde_json::json!({
-                "prompt": prompt,
-                "signature": signature,
-                "model": model,
-                "apiKey": api_key,
-            });
-            (
-                SKILL_GENERATE_CODE_FROM_SIGNATURE_JS,
-                SCHEMA_GENERATE_CODE_FROM_SIGNATURE_JS,
-                args.to_string(),
-            )
+    let skill_dir = skill_dir_for_name(name)?;
+    if skill_dir.exists() {
+        if !force {
+            eprintln!(
+                "Error: skill directory already exists: {} (use --force to overwrite)",
+                skill_dir.display()
+            );
+            std::process::exit(1);
         }
-        None => {
-            let args = serde_json::json!({
-                "prompt": prompt,
-                "model": model,
-                "apiKey": api_key,
-            });
-            (
-                SKILL_GENERATE_CODE_JS,
-                SCHEMA_GENERATE_CODE_JS,
-                args.to_string(),
+        fs::remove_dir_all(&skill_dir).with_context(|| {
+            format!(
+                "failed to remove existing skill directory: {}",
+                skill_dir.display()
             )
-        }
-    };
+        })?;
+    }
 
-    let r = run_builtin_skill(engine, skill_source, schema_source, &args_json)?;
-    match r {
-        Ok(json) => print_generated(&json)?,
+    let mut args = serde_json::Map::new();
+    args.insert(
+        "prompt".to_string(),
+        serde_json::Value::String(prompt.to_string()),
+    );
+    args.insert(
+        "model".to_string(),
+        serde_json::Value::String(model.to_string()),
+    );
+    args.insert("apiKey".to_string(), serde_json::Value::String(api_key));
+    if let Some(path) = signature_file {
+        let signature = match load_signature_value(path) {
+            Ok(sig) => sig,
+            Err(msg) => {
+                eprintln!("agent error: {msg}");
+                std::process::exit(1);
+            }
+        };
+        args.insert("signature".to_string(), signature);
+    }
+    let args_json = serde_json::Value::Object(args).to_string();
+
+    let r = run_builtin_skill(
+        engine,
+        SKILL_GENERATE_SKILL_CODE_JS,
+        SCHEMA_GENERATE_SKILL_CODE_JS,
+        &args_json,
+    )?;
+    let json = match r {
+        Ok(j) => j,
         Err(err) => {
             eprintln!("agent error: [{:?}] {}", err.code, err.message);
             std::process::exit(1);
         }
-    }
+    };
+
+    let (code, capabilities) = parse_generated(&json)?;
+    write_generated_skill(&skill_dir, prompt, &code, &capabilities)?;
+    print_generate_summary(&skill_dir, &capabilities, name, model);
 
     Ok(())
 }
 
-fn print_generated(json: &str) -> Result<()> {
+fn validate_skill_name(name: &str) -> std::result::Result<(), String> {
+    if name.is_empty() {
+        return Err("skill name must not be empty".into());
+    }
+    if name == "." || name == ".." {
+        return Err("skill name must not be '.' or '..'".into());
+    }
+    if name.contains('/') || name.contains('\\') {
+        return Err("skill name must not contain path separators".into());
+    }
+    Ok(())
+}
+
+fn skill_dir_for_name(name: &str) -> Result<PathBuf> {
+    let home = dirs::home_dir().context("failed to determine home directory")?;
+    Ok(home.join(".skill-forge").join("skills").join(name))
+}
+
+fn parse_generated(json: &str) -> Result<(String, Vec<String>)> {
     let v: serde_json::Value = serde_json::from_str(json)
         .with_context(|| format!("failed to parse builtin skill output as JSON: {json}"))?;
-    let code = v.get("code").and_then(|c| c.as_str()).unwrap_or("");
+    let code = v
+        .get("code")
+        .and_then(|c| c.as_str())
+        .ok_or_else(|| anyhow::anyhow!("generated output missing 'code' string field"))?
+        .to_string();
     let capabilities = v
         .get("capabilities")
         .and_then(|c| c.as_array())
@@ -687,10 +763,44 @@ fn print_generated(json: &str) -> Result<()> {
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    println!("code:");
-    println!("{code}");
-    println!("capabilities: {}", capabilities.join(", "));
+    Ok((code, capabilities))
+}
+
+fn write_generated_skill(
+    skill_dir: &Path,
+    prompt: &str,
+    code: &str,
+    capabilities: &[String],
+) -> Result<()> {
+    fs::create_dir_all(skill_dir)
+        .with_context(|| format!("failed to create skill directory: {}", skill_dir.display()))?;
+
+    let header = format!("// capabilities: {}\n", capabilities.join(", "));
+    let skill_js = format!("{header}{code}");
+    let skill_path = skill_dir.join("skill.js");
+    fs::write(&skill_path, skill_js)
+        .with_context(|| format!("failed to write {}", skill_path.display()))?;
+
+    let schema_path = skill_dir.join("schema.js");
+    fs::write(
+        &schema_path,
+        "defineSchema({ type: 'object', additionalProperties: true });\n",
+    )
+    .with_context(|| format!("failed to write {}", schema_path.display()))?;
+
+    let prompt_path = skill_dir.join("PROMPT.md");
+    fs::write(&prompt_path, prompt)
+        .with_context(|| format!("failed to write {}", prompt_path.display()))?;
+
     Ok(())
+}
+
+fn print_generate_summary(skill_dir: &Path, capabilities: &[String], name: &str, model: &str) {
+    println!("wrote {}", skill_dir.join("skill.js").display());
+    println!("wrote {}", skill_dir.join("schema.js").display());
+    println!("wrote {}", skill_dir.join("PROMPT.md").display());
+    println!("capabilities: {}", capabilities.join(", "));
+    println!("run with: skill-forge run {name} --model {model}");
 }
 
 fn load_signature_value(path: &PathBuf) -> std::result::Result<serde_json::Value, String> {
