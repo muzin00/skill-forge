@@ -10,6 +10,7 @@ import {
 export interface Generated {
   code: string;
   capabilities: string[];
+  schema: Record<string, unknown>;
 }
 
 export interface SignatureEntry {
@@ -34,12 +35,28 @@ const SHARED_POLICY = `# Code generation policy
 - \`callLlm(prompt: string, input?: object): Promise<string>\` — Ask an LLM to produce a string given a prompt and structured input. Use this only for non-deterministic transformations.
 - \`execCmd(cmd: string, args: string[]): Promise<string>\` — Run an external command on the host and return its stdout as a string. Use this for deterministic external invocations (CLI tools, system commands).
 
+# Input schema
+
+Along with the code, you must declare the shape of the \`input\` object that the generated \`defineSkill\` callback consumes, as a JSON Schema object placed in the \`schema\` field of the submit tool. The schema describes how the host CLI surfaces flags to the user and validates them before invoking the skill.
+
+Constraints:
+
+- The root \`type\` MUST be \`"object"\`.
+- \`additionalProperties\` MUST be \`false\` at the root.
+- The set of keys under \`properties\` MUST exactly match the keys the generated code reads from \`input\` (no extra keys, no missing keys). If the code does not read any input keys, \`properties\` is an empty object.
+- \`required\` MUST list every key that the code dereferences unconditionally. Optional keys (those guarded by \`if (input.x)\` / \`?? defaultValue\` / etc.) MUST be omitted from \`required\`.
+- Each property's \`type\` MUST be one of: \`"string"\`, \`"number"\`, \`"integer"\`, \`"boolean"\`, \`"array"\`. Nested objects are NOT allowed.
+- Allowed property keywords: \`type\`, \`description\`, \`default\`, \`enum\`, \`items\` (only when \`type\` is \`"array"\`; \`items.type\` must be one of \`"string"\` / \`"number"\` / \`"integer"\` / \`"boolean"\`).
+- Forbidden anywhere in the schema: \`oneOf\`, \`allOf\`, \`anyOf\`, \`$ref\`, \`pattern\`, \`minimum\`, \`maximum\`, and nested \`object\` types.
+- Always provide a short \`description\` for each property so the CLI help text is informative.
+
 # Output protocol
 
 Call the \`submit_generated_code\` tool exactly once. Do not produce any free-form text response. The tool input must contain:
 
 - \`code\`: the full JavaScript source. Must call \`defineSkill(async (input) => { ... })\` at the top level.
 - \`capabilities\`: the list of host primitives the code actually invokes. Include \`"callLlm"\` if the code calls \`callLlm\`, and \`"execCmd"\` if the code calls \`execCmd\`. If the code uses no host primitives, return an empty list.
+- \`schema\`: the JSON Schema object describing the \`input\` shape, following the constraints above.
 `;
 
 const PROMPT_ONLY_SYSTEM_PROMPT = `You are a code generation agent for skill-forge.
@@ -70,6 +87,7 @@ You MUST produce code that mirrors the signature:
 6. **finalAnswer → return**: The trailing \`finalAnswer.input.result\` corresponds to the value returned from the \`defineSkill\` callback. Construct the return value deterministically from intermediate variables (or return a string literal when the signature shows it is constant). Do not call \`callLlm\` to construct the return value.
 7. **Do not hardcode observed outputs**: The \`output\` field of a \`callLlm\` or \`execCmd\` entry is one past observation, not a fixed answer. Re-invoke the primitive at runtime so future executions re-derive it.
 8. **No alternate termination**: The only function exit is the \`return\` corresponding to \`finalAnswer\`. Do not introduce throws or branches that bypass the recorded sequence.
+9. **Schema mirrors observed input keys**: The signature's \`callLlm\` / \`execCmd\` entries reveal which \`input.<key>\` references the original execution used (look at the \`input\` JSON of each entry and at \`args\` arrays). The \`schema.properties\` field MUST contain exactly those keys (and only those keys), with types inferred from how each value was used. Keys that the recorded execution dereferenced unconditionally belong in \`required\`.
 `;
 
 const SUBMIT_TOOL: ToolDefinition = {
@@ -89,8 +107,13 @@ const SUBMIT_TOOL: ToolDefinition = {
         items: { type: 'string', enum: [...ALLOWED_CAPABILITIES] },
         description: 'code が実際に呼び出す host primitive のリスト。',
       },
+      schema: {
+        type: 'object',
+        description:
+          '生成した skill が受け取る input オブジェクトの JSON Schema。type は "object" 固定、additionalProperties は false、properties のキー集合は code が input から取り出すキーと完全一致させる。',
+      },
     },
-    required: ['code', 'capabilities'],
+    required: ['code', 'capabilities', 'schema'],
     additionalProperties: false,
   },
 };
@@ -185,7 +208,13 @@ function extractGenerated(response: MessagesCreateResponse): Generated {
     capabilities.push(cap);
   }
 
-  return { code, capabilities };
+  const schemaRaw = inputObj.schema;
+  if (typeof schemaRaw !== 'object' || schemaRaw === null || Array.isArray(schemaRaw)) {
+    throw 'spec-violation: tool_use input is missing object field "schema"';
+  }
+  const schema = schemaRaw as Record<string, unknown>;
+
+  return { code, capabilities, schema };
 }
 
 function isAllowedCapability(value: string): value is AllowedCapability {

@@ -11,6 +11,7 @@ use wasmtime::component::{Component, Linker, ResourceTable, bindgen};
 use wasmtime::{Config, Engine, Store};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiView};
 
+mod generated_schema;
 mod skill_args;
 mod validator;
 
@@ -669,20 +670,12 @@ fn run_generate(
         .context("ANTHROPIC_API_KEY environment variable is required")?;
 
     let skill_dir = skill_dir_for_name(name)?;
-    if skill_dir.exists() {
-        if !force {
-            eprintln!(
-                "Error: skill directory already exists: {} (use --force to overwrite)",
-                skill_dir.display()
-            );
-            std::process::exit(1);
-        }
-        fs::remove_dir_all(&skill_dir).with_context(|| {
-            format!(
-                "failed to remove existing skill directory: {}",
-                skill_dir.display()
-            )
-        })?;
+    if skill_dir.exists() && !force {
+        eprintln!(
+            "Error: skill directory already exists: {} (use --force to overwrite)",
+            skill_dir.display()
+        );
+        std::process::exit(1);
     }
 
     let mut args = serde_json::Map::new();
@@ -721,8 +714,22 @@ fn run_generate(
         }
     };
 
-    let (code, capabilities) = parse_generated(&json)?;
-    write_generated_skill(&skill_dir, prompt, &code, &capabilities)?;
+    let (code, capabilities, schema) = parse_generated(&json)?;
+    if let Err(msg) = generated_schema::validate(&schema) {
+        eprintln!("Error: generated schema invalid: {msg}");
+        std::process::exit(1);
+    }
+
+    if skill_dir.exists() {
+        fs::remove_dir_all(&skill_dir).with_context(|| {
+            format!(
+                "failed to remove existing skill directory: {}",
+                skill_dir.display()
+            )
+        })?;
+    }
+
+    write_generated_skill(&skill_dir, prompt, &code, &capabilities, &schema)?;
     print_generate_summary(&skill_dir, &capabilities, name, model);
 
     Ok(())
@@ -746,7 +753,7 @@ fn skill_dir_for_name(name: &str) -> Result<PathBuf> {
     Ok(home.join(".skill-forge").join("skills").join(name))
 }
 
-fn parse_generated(json: &str) -> Result<(String, Vec<String>)> {
+fn parse_generated(json: &str) -> Result<(String, Vec<String>, serde_json::Value)> {
     let v: serde_json::Value = serde_json::from_str(json)
         .with_context(|| format!("failed to parse builtin skill output as JSON: {json}"))?;
     let code = v
@@ -763,7 +770,14 @@ fn parse_generated(json: &str) -> Result<(String, Vec<String>)> {
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    Ok((code, capabilities))
+    let schema = v
+        .get("schema")
+        .ok_or_else(|| anyhow::anyhow!("generated output missing 'schema' field"))?
+        .clone();
+    if !schema.is_object() {
+        anyhow::bail!("generated output 'schema' is not a JSON object");
+    }
+    Ok((code, capabilities, schema))
 }
 
 fn write_generated_skill(
@@ -771,6 +785,7 @@ fn write_generated_skill(
     prompt: &str,
     code: &str,
     capabilities: &[String],
+    schema: &serde_json::Value,
 ) -> Result<()> {
     fs::create_dir_all(skill_dir)
         .with_context(|| format!("failed to create skill directory: {}", skill_dir.display()))?;
@@ -781,12 +796,12 @@ fn write_generated_skill(
     fs::write(&skill_path, skill_js)
         .with_context(|| format!("failed to write {}", skill_path.display()))?;
 
+    let schema_json = serde_json::to_string_pretty(schema)
+        .context("failed to serialize generated schema as JSON")?;
+    let schema_js = format!("defineSchema({schema_json});\n");
     let schema_path = skill_dir.join("schema.js");
-    fs::write(
-        &schema_path,
-        "defineSchema({ type: 'object', additionalProperties: true });\n",
-    )
-    .with_context(|| format!("failed to write {}", schema_path.display()))?;
+    fs::write(&schema_path, schema_js)
+        .with_context(|| format!("failed to write {}", schema_path.display()))?;
 
     let prompt_path = skill_dir.join("PROMPT.md");
     fs::write(&prompt_path, prompt)
@@ -913,5 +928,71 @@ fn print_skill_error(err: &SkillError) {
     eprintln!("[{:?}] {}", err.code, err.message);
     if let Some(stack) = &err.stack {
         eprintln!("stack:\n{stack}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn parse_generated_returns_code_capabilities_and_schema() {
+        let json = json!({
+            "code": "defineSkill(async () => 'ok');",
+            "capabilities": ["callLlm"],
+            "schema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }
+        })
+        .to_string();
+        let (code, caps, schema) = parse_generated(&json).unwrap();
+        assert_eq!(code, "defineSkill(async () => 'ok');");
+        assert_eq!(caps, vec!["callLlm".to_string()]);
+        assert_eq!(schema.get("type").and_then(|v| v.as_str()), Some("object"));
+    }
+
+    #[test]
+    fn parse_generated_errors_when_schema_missing() {
+        let json = json!({
+            "code": "defineSkill(async () => 'ok');",
+            "capabilities": []
+        })
+        .to_string();
+        let err = parse_generated(&json).unwrap_err().to_string();
+        assert!(err.contains("schema"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn parse_generated_errors_when_schema_not_object() {
+        let json = json!({
+            "code": "defineSkill(async () => 'ok');",
+            "capabilities": [],
+            "schema": "not-an-object"
+        })
+        .to_string();
+        let err = parse_generated(&json).unwrap_err().to_string();
+        assert!(err.contains("not a JSON object"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn write_generated_skill_writes_schema_with_define_schema_wrapper() {
+        let tmp = std::env::temp_dir().join(format!("skill-forge-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let schema = json!({
+            "type": "object",
+            "properties": { "userName": { "type": "string" } },
+            "required": ["userName"],
+            "additionalProperties": false
+        });
+        write_generated_skill(&tmp, "prompt", "code", &["callLlm".into()], &schema).unwrap();
+        let schema_js = fs::read_to_string(tmp.join("schema.js")).unwrap();
+        assert!(schema_js.starts_with("defineSchema("));
+        assert!(schema_js.trim_end().ends_with(");"));
+        assert!(schema_js.contains("\"userName\""));
+        assert!(schema_js.contains("\"additionalProperties\": false"));
+        let _ = fs::remove_dir_all(&tmp);
     }
 }
