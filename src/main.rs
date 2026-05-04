@@ -1,6 +1,6 @@
 use std::env;
 use std::fs;
-use std::io::{self, IsTerminal, Read};
+use std::io::{self, BufRead, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::Instant;
@@ -110,6 +110,8 @@ enum Command {
         no_interpret: bool,
         #[arg(long, default_value_t = false)]
         force: bool,
+        #[arg(long, default_value_t = false)]
+        yes: bool,
     },
     Interpret {
         #[arg(long)]
@@ -123,6 +125,13 @@ enum Command {
 enum Profile {
     User,
     Builtin,
+}
+
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+enum ExecApprovalMode {
+    Off,
+    AllowAll,
+    Prompt,
 }
 
 #[derive(Clone)]
@@ -141,6 +150,7 @@ struct SkillState {
     engine: Engine,
     component: Component,
     depth: usize,
+    exec_approval: ExecApprovalMode,
 }
 
 impl WasiView for SkillState {
@@ -195,7 +205,74 @@ impl ExecHost for SkillState {
         cmd: String,
         args: Vec<String>,
     ) -> wasmtime::Result<std::result::Result<String, String>> {
-        Ok(exec_cmd_impl(&cmd, &args))
+        match self.exec_approval {
+            ExecApprovalMode::Off | ExecApprovalMode::AllowAll => Ok(exec_cmd_impl(&cmd, &args)),
+            ExecApprovalMode::Prompt => match prompt_exec_approval(&cmd, &args)? {
+                ApprovalChoice::Approve => Ok(exec_cmd_impl(&cmd, &args)),
+                ApprovalChoice::AllowAll => {
+                    self.exec_approval = ExecApprovalMode::AllowAll;
+                    Ok(exec_cmd_impl(&cmd, &args))
+                }
+                ApprovalChoice::Deny => Ok(Ok(format_user_denied(&cmd, &args))),
+                ApprovalChoice::Quit => Ok(Err("user-quit: aborted by user".to_string())),
+            },
+        }
+    }
+}
+
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+enum ApprovalChoice {
+    Approve,
+    Deny,
+    AllowAll,
+    Quit,
+}
+
+fn parse_approval_choice(input: &str) -> Option<ApprovalChoice> {
+    match input.trim().to_ascii_lowercase().as_str() {
+        "y" | "yes" => Some(ApprovalChoice::Approve),
+        "n" | "no" => Some(ApprovalChoice::Deny),
+        "a" | "all" => Some(ApprovalChoice::AllowAll),
+        "q" | "quit" => Some(ApprovalChoice::Quit),
+        _ => None,
+    }
+}
+
+fn format_user_denied(cmd: &str, args: &[String]) -> String {
+    let joined = args
+        .iter()
+        .map(|a| format!("{a:?}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    if joined.is_empty() {
+        format!("user-denied: {cmd}")
+    } else {
+        format!("user-denied: {cmd} {joined}")
+    }
+}
+
+fn prompt_exec_approval(cmd: &str, args: &[String]) -> wasmtime::Result<ApprovalChoice> {
+    let stderr = io::stderr();
+    let mut err = stderr.lock();
+    writeln!(err, "[approval] interpret wants to run:")?;
+    writeln!(err, "  cmd:  {cmd}")?;
+    writeln!(err, "  args: {args:?}")?;
+    let stdin = io::stdin();
+    let mut stdin_lock = stdin.lock();
+    loop {
+        write!(err, "[approval] approve? (y=yes / n=no / a=all / q=quit): ")?;
+        err.flush()?;
+        let mut line = String::new();
+        let n = stdin_lock.read_line(&mut line)?;
+        if n == 0 {
+            return Err(anyhow::anyhow!(
+                "user-quit: stdin closed during approval prompt"
+            ));
+        }
+        if let Some(choice) = parse_approval_choice(&line) {
+            return Ok(choice);
+        }
+        writeln!(err, "[approval] invalid input: {:?}", line.trim())?;
     }
 }
 
@@ -226,6 +303,7 @@ impl InvokeHost for SkillState {
         let engine = self.engine.clone();
         let component = self.component.clone();
         let llm_config = self.llm_config.clone();
+        let exec_approval = self.exec_approval;
         let linker = build_linker(&engine)
             .map_err(|e| anyhow::anyhow!("failed to build linker for invoke: {e}"))?;
         let (mut store, runtime) = instantiate(
@@ -237,6 +315,7 @@ impl InvokeHost for SkillState {
             Profile::Builtin,
             llm_config,
             next_depth,
+            exec_approval,
         )
         .map_err(|e| anyhow::anyhow!("failed to instantiate skill for invoke: {e}"))?;
         let started = Instant::now();
@@ -362,6 +441,7 @@ fn main() -> Result<()> {
             signature_file,
             no_interpret,
             force,
+            yes,
         } => run_generate(
             &engine,
             &prompt,
@@ -370,6 +450,7 @@ fn main() -> Result<()> {
             signature_file.as_ref(),
             no_interpret,
             force,
+            yes,
         ),
         Command::Interpret { prompt, model } => run_interpret(&engine, &prompt, &model),
     }
@@ -401,6 +482,7 @@ fn instantiate(
     profile: Profile,
     llm_config: Option<LlmConfig>,
     depth: usize,
+    exec_approval: ExecApprovalMode,
 ) -> Result<(Store<SkillState>, SkillRuntime)> {
     let state = SkillState {
         ctx: WasiCtxBuilder::new().inherit_stdio().build(),
@@ -412,6 +494,7 @@ fn instantiate(
         engine: engine.clone(),
         component: component.clone(),
         depth,
+        exec_approval,
     };
     let mut store = Store::new(engine, state);
     let started = Instant::now();
@@ -443,6 +526,7 @@ fn run_skill_run(engine: &Engine, raw_argv: Vec<String>) -> Result<()> {
         Profile::User,
         Some(LlmConfig { model, api_key }),
         0,
+        ExecApprovalMode::Off,
     )?;
 
     let schema_started = Instant::now();
@@ -638,6 +722,7 @@ fn run_builtin_skill(
     skill_source: &str,
     schema_source: &str,
     args_json: &str,
+    exec_approval: ExecApprovalMode,
 ) -> Result<std::result::Result<String, SkillError>> {
     let component = deserialize_runtime_component(engine)?;
     let linker = build_linker(engine)?;
@@ -650,6 +735,7 @@ fn run_builtin_skill(
         Profile::Builtin,
         None,
         0,
+        exec_approval,
     )?;
     let started = Instant::now();
     let r = runtime.call_run(&mut store, args_json)?;
@@ -665,6 +751,7 @@ fn run_generate(
     signature_file: Option<&PathBuf>,
     no_interpret: bool,
     force: bool,
+    yes: bool,
 ) -> Result<()> {
     if let Err(msg) = validate_skill_name(name) {
         eprintln!("Error: --name: {msg}");
@@ -698,6 +785,13 @@ fn run_generate(
     } else if no_interpret {
         None
     } else {
+        let interpret_approval = match resolve_interpret_approval(yes, io::stdin().is_terminal()) {
+            Ok(mode) => mode,
+            Err(msg) => {
+                eprintln!("Error: {msg}");
+                std::process::exit(2);
+            }
+        };
         println!("interpreting prompt...");
         let interpret_args = serde_json::json!({
             "prompt": prompt,
@@ -710,6 +804,7 @@ fn run_generate(
             SKILL_INTERPRET_JS,
             SCHEMA_INTERPRET_JS,
             &interpret_args,
+            interpret_approval,
         )?;
         let interpret_json = match r {
             Ok(j) => j,
@@ -748,6 +843,7 @@ fn run_generate(
         SKILL_GENERATE_SKILL_CODE_JS,
         SCHEMA_GENERATE_SKILL_CODE_JS,
         &args_json,
+        ExecApprovalMode::Off,
     )?;
     let json = match r {
         Ok(j) => j,
@@ -912,6 +1008,22 @@ fn validate_generate_flags(
     Ok(())
 }
 
+fn resolve_interpret_approval(
+    yes: bool,
+    stdin_is_tty: bool,
+) -> std::result::Result<ExecApprovalMode, String> {
+    if yes {
+        Ok(ExecApprovalMode::AllowAll)
+    } else if stdin_is_tty {
+        Ok(ExecApprovalMode::Prompt)
+    } else {
+        Err(
+            "interpret execCmd approval is required but stdin is not a TTY; pass --yes to auto-approve"
+                .to_string(),
+        )
+    }
+}
+
 fn run_interpret(engine: &Engine, prompt: &str, model: &str) -> Result<()> {
     let api_key = env::var("ANTHROPIC_API_KEY")
         .context("ANTHROPIC_API_KEY environment variable is required")?;
@@ -927,6 +1039,7 @@ fn run_interpret(engine: &Engine, prompt: &str, model: &str) -> Result<()> {
         SKILL_INTERPRET_JS,
         SCHEMA_INTERPRET_JS,
         &args.to_string(),
+        ExecApprovalMode::Off,
     )?;
     match r {
         Ok(json) => print_interpreted(&json)?,
@@ -1091,6 +1204,62 @@ mod tests {
             err.contains("--signature-file") && err.contains("--no-interpret"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn parse_approval_choice_recognizes_known_inputs() {
+        assert_eq!(parse_approval_choice("y\n"), Some(ApprovalChoice::Approve));
+        assert_eq!(
+            parse_approval_choice(" YES "),
+            Some(ApprovalChoice::Approve)
+        );
+        assert_eq!(parse_approval_choice("n"), Some(ApprovalChoice::Deny));
+        assert_eq!(parse_approval_choice("a"), Some(ApprovalChoice::AllowAll));
+        assert_eq!(parse_approval_choice("Quit"), Some(ApprovalChoice::Quit));
+    }
+
+    #[test]
+    fn parse_approval_choice_rejects_unknown_inputs() {
+        assert_eq!(parse_approval_choice(""), None);
+        assert_eq!(parse_approval_choice("maybe"), None);
+        assert_eq!(parse_approval_choice("ya"), None);
+    }
+
+    #[test]
+    fn format_user_denied_includes_cmd_and_args() {
+        let s = format_user_denied("gh", &["issue".into(), "view".into(), "73".into()]);
+        assert_eq!(s, "user-denied: gh \"issue\" \"view\" \"73\"");
+    }
+
+    #[test]
+    fn format_user_denied_with_no_args() {
+        assert_eq!(format_user_denied("ls", &[]), "user-denied: ls");
+    }
+
+    #[test]
+    fn resolve_interpret_approval_yes_returns_allow_all() {
+        assert_eq!(
+            resolve_interpret_approval(true, false).unwrap(),
+            ExecApprovalMode::AllowAll
+        );
+        assert_eq!(
+            resolve_interpret_approval(true, true).unwrap(),
+            ExecApprovalMode::AllowAll
+        );
+    }
+
+    #[test]
+    fn resolve_interpret_approval_tty_without_yes_returns_prompt() {
+        assert_eq!(
+            resolve_interpret_approval(false, true).unwrap(),
+            ExecApprovalMode::Prompt
+        );
+    }
+
+    #[test]
+    fn resolve_interpret_approval_non_tty_without_yes_errors() {
+        let err = resolve_interpret_approval(false, false).unwrap_err();
+        assert!(err.contains("--yes"), "unexpected error: {err}");
     }
 
     #[test]
