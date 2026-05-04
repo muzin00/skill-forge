@@ -761,6 +761,14 @@ fn run_generate(
         eprintln!("Error: {msg}");
         std::process::exit(2);
     }
+    let resolved_prompt = match resolve_prompt(prompt) {
+        Ok(p) => p,
+        Err((msg, code)) => {
+            eprintln!("Error: {msg}");
+            std::process::exit(code);
+        }
+    };
+    let prompt = resolved_prompt.as_str();
 
     let api_key = env::var("ANTHROPIC_API_KEY")
         .context("ANTHROPIC_API_KEY environment variable is required")?;
@@ -1006,6 +1014,35 @@ fn validate_generate_flags(
         return Err("--signature-file and --no-interpret are mutually exclusive".to_string());
     }
     Ok(())
+}
+
+fn resolve_prompt(raw: &str) -> std::result::Result<String, (String, i32)> {
+    if let Some(rest) = raw.strip_prefix("@@") {
+        return Ok(format!("@{rest}"));
+    }
+    if let Some(path_str) = raw.strip_prefix('@') {
+        if path_str.is_empty() {
+            return Err(("--prompt: path is empty after '@'".to_string(), 2));
+        }
+        let path = Path::new(path_str);
+        let bytes = fs::read(path).map_err(|e| {
+            (
+                format!("--prompt: failed to read {}: {e}", path.display()),
+                1,
+            )
+        })?;
+        let content = String::from_utf8(bytes).map_err(|_| {
+            (
+                format!("--prompt: file is not valid UTF-8: {}", path.display()),
+                1,
+            )
+        })?;
+        if content.trim().is_empty() {
+            return Err((format!("--prompt: file is empty: {}", path.display()), 1));
+        }
+        return Ok(content);
+    }
+    Ok(raw.to_string())
 }
 
 fn resolve_interpret_approval(
@@ -1260,6 +1297,94 @@ mod tests {
     fn resolve_interpret_approval_non_tty_without_yes_errors() {
         let err = resolve_interpret_approval(false, false).unwrap_err();
         assert!(err.contains("--yes"), "unexpected error: {err}");
+    }
+
+    fn resolve_prompt_tmp_dir() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "skill-forge-resolve-prompt-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn resolve_prompt_returns_literal_string() {
+        assert_eq!(resolve_prompt("hello").unwrap(), "hello");
+    }
+
+    #[test]
+    fn resolve_prompt_reads_file_content() {
+        let dir = resolve_prompt_tmp_dir();
+        let path = dir.join("p.md");
+        fs::write(&path, "line1\nline2\n").unwrap();
+        let raw = format!("@{}", path.display());
+        assert_eq!(resolve_prompt(&raw).unwrap(), "line1\nline2\n");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_prompt_double_at_is_literal_with_single_at() {
+        assert_eq!(resolve_prompt("@@literal").unwrap(), "@literal");
+        assert_eq!(resolve_prompt("@@").unwrap(), "@");
+    }
+
+    #[test]
+    fn resolve_prompt_empty_path_after_at_errors_with_exit_2() {
+        let (msg, code) = resolve_prompt("@").unwrap_err();
+        assert_eq!(code, 2);
+        assert!(msg.contains("path is empty"), "unexpected error: {msg}");
+    }
+
+    #[test]
+    fn resolve_prompt_missing_file_errors_with_exit_1() {
+        let dir = resolve_prompt_tmp_dir();
+        let path = dir.join("nope.md");
+        let raw = format!("@{}", path.display());
+        let (msg, code) = resolve_prompt(&raw).unwrap_err();
+        assert_eq!(code, 1);
+        assert!(msg.contains("failed to read"), "unexpected error: {msg}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_prompt_empty_file_errors_with_exit_1() {
+        let dir = resolve_prompt_tmp_dir();
+        let path = dir.join("empty.md");
+        fs::write(&path, "").unwrap();
+        let raw = format!("@{}", path.display());
+        let (msg, code) = resolve_prompt(&raw).unwrap_err();
+        assert_eq!(code, 1);
+        assert!(msg.contains("empty"), "unexpected error: {msg}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_prompt_whitespace_only_file_errors_with_exit_1() {
+        let dir = resolve_prompt_tmp_dir();
+        let path = dir.join("ws.md");
+        fs::write(&path, "  \n\t\n").unwrap();
+        let raw = format!("@{}", path.display());
+        let (msg, code) = resolve_prompt(&raw).unwrap_err();
+        assert_eq!(code, 1);
+        assert!(msg.contains("empty"), "unexpected error: {msg}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_prompt_non_utf8_file_errors_with_exit_1() {
+        let dir = resolve_prompt_tmp_dir();
+        let path = dir.join("bin.md");
+        fs::write(&path, [0xff, 0xfe, 0xfd]).unwrap();
+        let raw = format!("@{}", path.display());
+        let (msg, code) = resolve_prompt(&raw).unwrap_err();
+        assert_eq!(code, 1);
+        assert!(msg.contains("UTF-8"), "unexpected error: {msg}");
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
