@@ -34,3 +34,5 @@ the body and propose a kebab-case branch name, then runs `git checkout -b
 1. Optionally explore by calling callLlm / execCmd to verify your design.
 2. Call submit_generated_code exactly once with {code, capabilities, schema}.
 3. Stop.
+
+Note: Use `issueNumber` (camelCase) as the single schema property key.
