@@ -12,6 +12,7 @@ use wasmtime::{Config, Engine, Store};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiView};
 
 mod generated_schema;
+mod mcp;
 mod skill_args;
 mod validator;
 
@@ -104,6 +105,8 @@ enum Command {
         #[arg(long, default_value_t = false)]
         force: bool,
     },
+    #[command(hide = true)]
+    McpServer,
 }
 
 #[derive(Copy, Clone, Eq, PartialEq)]
@@ -251,7 +254,7 @@ impl AnthropicHost for SkillState {
     }
 }
 
-fn host_call_llm(
+pub(crate) fn host_call_llm(
     prompt: &str,
     input_json: &str,
     model: &str,
@@ -289,7 +292,7 @@ fn host_call_llm(
     Ok(text)
 }
 
-fn exec_cmd_impl(cmd: &str, args: &[String]) -> std::result::Result<String, String> {
+pub(crate) fn exec_cmd_impl(cmd: &str, args: &[String]) -> std::result::Result<String, String> {
     let output = std::process::Command::new(cmd)
         .args(args)
         .output()
@@ -348,6 +351,7 @@ fn main() -> Result<()> {
             model,
             force,
         } => run_generate(&engine, &prompt, &name, &model, force),
+        Command::McpServer => mcp::run(),
     }
 }
 
