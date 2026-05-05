@@ -1,14 +1,28 @@
 import { build } from 'rolldown';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
+import { resolve, dirname } from 'node:path';
 
 const SKILLS = [
   'call-llm',
-  'interpret',
   'generate-skill-code',
   'echo',
   'error',
   'compose',
 ];
+
+const rawMarkdownPlugin = {
+  name: 'raw-markdown',
+  async resolveId(source, importer) {
+    if (!source.endsWith('.md')) return null;
+    const base = importer ? dirname(importer) : process.cwd();
+    return resolve(base, source);
+  },
+  async load(id) {
+    if (!id.endsWith('.md')) return null;
+    const content = await readFile(id, 'utf8');
+    return `export default ${JSON.stringify(content)};`;
+  },
+};
 
 for (const name of SKILLS) {
   await mkdir(`dist/skills/${name}`, { recursive: true });
@@ -19,6 +33,7 @@ for (const name of SKILLS) {
         file: `dist/skills/${name}/${part}.js`,
         format: 'esm',
       },
+      plugins: [rawMarkdownPlugin],
     });
   }
 }

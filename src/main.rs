@@ -1,6 +1,6 @@
 use std::env;
 use std::fs;
-use std::io::{self, BufRead, IsTerminal, Read, Write};
+use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::Instant;
@@ -33,7 +33,6 @@ const RUNTIME_CWASM: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/skill-run
 
 #[allow(dead_code)]
 const SKILL_CALL_LLM_JS: &str = include_str!("../agent/dist/skills/call-llm/skill.js");
-const SKILL_INTERPRET_JS: &str = include_str!("../agent/dist/skills/interpret/skill.js");
 const SKILL_GENERATE_SKILL_CODE_JS: &str =
     include_str!("../agent/dist/skills/generate-skill-code/skill.js");
 const SKILL_ECHO_JS: &str = include_str!("../agent/dist/skills/echo/skill.js");
@@ -41,7 +40,6 @@ const SKILL_ERROR_JS: &str = include_str!("../agent/dist/skills/error/skill.js")
 const SKILL_COMPOSE_JS: &str = include_str!("../agent/dist/skills/compose/skill.js");
 
 const SCHEMA_CALL_LLM_JS: &str = include_str!("../agent/dist/skills/call-llm/schema.js");
-const SCHEMA_INTERPRET_JS: &str = include_str!("../agent/dist/skills/interpret/schema.js");
 const SCHEMA_GENERATE_SKILL_CODE_JS: &str =
     include_str!("../agent/dist/skills/generate-skill-code/schema.js");
 const SCHEMA_ECHO_JS: &str = include_str!("../agent/dist/skills/echo/schema.js");
@@ -52,7 +50,6 @@ const MAX_INVOKE_DEPTH: usize = 8;
 
 const BUILTIN_SKILLS: &[(&str, &str, &str)] = &[
     ("call-llm", SKILL_CALL_LLM_JS, SCHEMA_CALL_LLM_JS),
-    ("interpret", SKILL_INTERPRET_JS, SCHEMA_INTERPRET_JS),
     (
         "generate-skill-code",
         SKILL_GENERATE_SKILL_CODE_JS,
@@ -104,20 +101,8 @@ enum Command {
         name: String,
         #[arg(long)]
         model: String,
-        #[arg(long)]
-        signature_file: Option<PathBuf>,
-        #[arg(long, default_value_t = false)]
-        no_interpret: bool,
         #[arg(long, default_value_t = false)]
         force: bool,
-        #[arg(long, default_value_t = false)]
-        yes: bool,
-    },
-    Interpret {
-        #[arg(long)]
-        prompt: String,
-        #[arg(long)]
-        model: String,
     },
 }
 
@@ -125,13 +110,6 @@ enum Command {
 enum Profile {
     User,
     Builtin,
-}
-
-#[derive(Copy, Clone, Eq, PartialEq, Debug)]
-enum ExecApprovalMode {
-    Off,
-    AllowAll,
-    Prompt,
 }
 
 #[derive(Clone)]
@@ -150,7 +128,6 @@ struct SkillState {
     engine: Engine,
     component: Component,
     depth: usize,
-    exec_approval: ExecApprovalMode,
 }
 
 impl WasiView for SkillState {
@@ -205,74 +182,7 @@ impl ExecHost for SkillState {
         cmd: String,
         args: Vec<String>,
     ) -> wasmtime::Result<std::result::Result<String, String>> {
-        match self.exec_approval {
-            ExecApprovalMode::Off | ExecApprovalMode::AllowAll => Ok(exec_cmd_impl(&cmd, &args)),
-            ExecApprovalMode::Prompt => match prompt_exec_approval(&cmd, &args)? {
-                ApprovalChoice::Approve => Ok(exec_cmd_impl(&cmd, &args)),
-                ApprovalChoice::AllowAll => {
-                    self.exec_approval = ExecApprovalMode::AllowAll;
-                    Ok(exec_cmd_impl(&cmd, &args))
-                }
-                ApprovalChoice::Deny => Ok(Ok(format_user_denied(&cmd, &args))),
-                ApprovalChoice::Quit => Ok(Err("user-quit: aborted by user".to_string())),
-            },
-        }
-    }
-}
-
-#[derive(Copy, Clone, Eq, PartialEq, Debug)]
-enum ApprovalChoice {
-    Approve,
-    Deny,
-    AllowAll,
-    Quit,
-}
-
-fn parse_approval_choice(input: &str) -> Option<ApprovalChoice> {
-    match input.trim().to_ascii_lowercase().as_str() {
-        "y" | "yes" => Some(ApprovalChoice::Approve),
-        "n" | "no" => Some(ApprovalChoice::Deny),
-        "a" | "all" => Some(ApprovalChoice::AllowAll),
-        "q" | "quit" => Some(ApprovalChoice::Quit),
-        _ => None,
-    }
-}
-
-fn format_user_denied(cmd: &str, args: &[String]) -> String {
-    let joined = args
-        .iter()
-        .map(|a| format!("{a:?}"))
-        .collect::<Vec<_>>()
-        .join(" ");
-    if joined.is_empty() {
-        format!("user-denied: {cmd}")
-    } else {
-        format!("user-denied: {cmd} {joined}")
-    }
-}
-
-fn prompt_exec_approval(cmd: &str, args: &[String]) -> wasmtime::Result<ApprovalChoice> {
-    let stderr = io::stderr();
-    let mut err = stderr.lock();
-    writeln!(err, "[approval] interpret wants to run:")?;
-    writeln!(err, "  cmd:  {cmd}")?;
-    writeln!(err, "  args: {args:?}")?;
-    let stdin = io::stdin();
-    let mut stdin_lock = stdin.lock();
-    loop {
-        write!(err, "[approval] approve? (y=yes / n=no / a=all / q=quit): ")?;
-        err.flush()?;
-        let mut line = String::new();
-        let n = stdin_lock.read_line(&mut line)?;
-        if n == 0 {
-            return Err(anyhow::anyhow!(
-                "user-quit: stdin closed during approval prompt"
-            ));
-        }
-        if let Some(choice) = parse_approval_choice(&line) {
-            return Ok(choice);
-        }
-        writeln!(err, "[approval] invalid input: {:?}", line.trim())?;
+        Ok(exec_cmd_impl(&cmd, &args))
     }
 }
 
@@ -303,7 +213,6 @@ impl InvokeHost for SkillState {
         let engine = self.engine.clone();
         let component = self.component.clone();
         let llm_config = self.llm_config.clone();
-        let exec_approval = self.exec_approval;
         let linker = build_linker(&engine)
             .map_err(|e| anyhow::anyhow!("failed to build linker for invoke: {e}"))?;
         let (mut store, runtime) = instantiate(
@@ -315,7 +224,6 @@ impl InvokeHost for SkillState {
             Profile::Builtin,
             llm_config,
             next_depth,
-            exec_approval,
         )
         .map_err(|e| anyhow::anyhow!("failed to instantiate skill for invoke: {e}"))?;
         let started = Instant::now();
@@ -438,21 +346,8 @@ fn main() -> Result<()> {
             prompt,
             name,
             model,
-            signature_file,
-            no_interpret,
             force,
-            yes,
-        } => run_generate(
-            &engine,
-            &prompt,
-            &name,
-            &model,
-            signature_file.as_ref(),
-            no_interpret,
-            force,
-            yes,
-        ),
-        Command::Interpret { prompt, model } => run_interpret(&engine, &prompt, &model),
+        } => run_generate(&engine, &prompt, &name, &model, force),
     }
 }
 
@@ -482,7 +377,6 @@ fn instantiate(
     profile: Profile,
     llm_config: Option<LlmConfig>,
     depth: usize,
-    exec_approval: ExecApprovalMode,
 ) -> Result<(Store<SkillState>, SkillRuntime)> {
     let state = SkillState {
         ctx: WasiCtxBuilder::new().inherit_stdio().build(),
@@ -494,7 +388,6 @@ fn instantiate(
         engine: engine.clone(),
         component: component.clone(),
         depth,
-        exec_approval,
     };
     let mut store = Store::new(engine, state);
     let started = Instant::now();
@@ -526,7 +419,6 @@ fn run_skill_run(engine: &Engine, raw_argv: Vec<String>) -> Result<()> {
         Profile::User,
         Some(LlmConfig { model, api_key }),
         0,
-        ExecApprovalMode::Off,
     )?;
 
     let schema_started = Instant::now();
@@ -722,7 +614,6 @@ fn run_builtin_skill(
     skill_source: &str,
     schema_source: &str,
     args_json: &str,
-    exec_approval: ExecApprovalMode,
 ) -> Result<std::result::Result<String, SkillError>> {
     let component = deserialize_runtime_component(engine)?;
     let linker = build_linker(engine)?;
@@ -735,7 +626,6 @@ fn run_builtin_skill(
         Profile::Builtin,
         None,
         0,
-        exec_approval,
     )?;
     let started = Instant::now();
     let r = runtime.call_run(&mut store, args_json)?;
@@ -743,22 +633,9 @@ fn run_builtin_skill(
     Ok(r)
 }
 
-fn run_generate(
-    engine: &Engine,
-    prompt: &str,
-    name: &str,
-    model: &str,
-    signature_file: Option<&PathBuf>,
-    no_interpret: bool,
-    force: bool,
-    yes: bool,
-) -> Result<()> {
+fn run_generate(engine: &Engine, prompt: &str, name: &str, model: &str, force: bool) -> Result<()> {
     if let Err(msg) = validate_skill_name(name) {
         eprintln!("Error: --name: {msg}");
-        std::process::exit(2);
-    }
-    if let Err(msg) = validate_generate_flags(signature_file, no_interpret) {
-        eprintln!("Error: {msg}");
         std::process::exit(2);
     }
     let resolved_prompt = match resolve_prompt(prompt) {
@@ -782,76 +659,19 @@ fn run_generate(
         std::process::exit(1);
     }
 
-    let signature: Option<serde_json::Value> = if let Some(path) = signature_file {
-        match load_signature_value(path) {
-            Ok(sig) => Some(sig),
-            Err(msg) => {
-                eprintln!("agent error: {msg}");
-                std::process::exit(1);
-            }
-        }
-    } else if no_interpret {
-        None
-    } else {
-        let interpret_approval = match resolve_interpret_approval(yes, io::stdin().is_terminal()) {
-            Ok(mode) => mode,
-            Err(msg) => {
-                eprintln!("Error: {msg}");
-                std::process::exit(2);
-            }
-        };
-        println!("interpreting prompt...");
-        let interpret_args = serde_json::json!({
-            "prompt": prompt,
-            "model": model,
-            "apiKey": api_key.clone(),
-        })
-        .to_string();
-        let r = run_builtin_skill(
-            engine,
-            SKILL_INTERPRET_JS,
-            SCHEMA_INTERPRET_JS,
-            &interpret_args,
-            interpret_approval,
-        )?;
-        let interpret_json = match r {
-            Ok(j) => j,
-            Err(err) => {
-                eprintln!("agent error: [{:?}] {}", err.code, err.message);
-                std::process::exit(1);
-            }
-        };
-        match extract_signature_from_interpret_output(&interpret_json) {
-            Ok(sig) => Some(sig),
-            Err(msg) => {
-                eprintln!("agent error: {msg}");
-                std::process::exit(1);
-            }
-        }
-    };
-
     println!("generating skill code...");
-    let mut args = serde_json::Map::new();
-    args.insert(
-        "prompt".to_string(),
-        serde_json::Value::String(prompt.to_string()),
-    );
-    args.insert(
-        "model".to_string(),
-        serde_json::Value::String(model.to_string()),
-    );
-    args.insert("apiKey".to_string(), serde_json::Value::String(api_key));
-    if let Some(sig) = signature {
-        args.insert("signature".to_string(), sig);
-    }
-    let args_json = serde_json::Value::Object(args).to_string();
+    let args_json = serde_json::json!({
+        "prompt": prompt,
+        "model": model,
+        "apiKey": api_key,
+    })
+    .to_string();
 
     let r = run_builtin_skill(
         engine,
         SKILL_GENERATE_SKILL_CODE_JS,
         SCHEMA_GENERATE_SKILL_CODE_JS,
         &args_json,
-        ExecApprovalMode::Off,
     )?;
     let json = match r {
         Ok(j) => j,
@@ -965,57 +785,6 @@ fn print_generate_summary(skill_dir: &Path, capabilities: &[String], name: &str,
     println!("run with: skill-forge run {name} --model {model}");
 }
 
-fn validate_signature_array(value: &serde_json::Value) -> std::result::Result<(), String> {
-    let array = value
-        .as_array()
-        .ok_or_else(|| "parse-error: signature root is not an array".to_string())?;
-    for (i, entry) in array.iter().enumerate() {
-        let obj = entry
-            .as_object()
-            .ok_or_else(|| format!("parse-error: signature entry {i} is not an object"))?;
-        for key in ["tool", "input", "output"] {
-            if !obj.get(key).map(|v| v.is_string()).unwrap_or(false) {
-                return Err(format!(
-                    "parse-error: signature entry {i} is missing string field \"{key}\""
-                ));
-            }
-        }
-    }
-    Ok(())
-}
-
-fn load_signature_value(path: &PathBuf) -> std::result::Result<serde_json::Value, String> {
-    let content = fs::read_to_string(path)
-        .map_err(|e| format!("failed to read signature file {}: {e}", path.display()))?;
-    let parsed: serde_json::Value = serde_json::from_str(&content)
-        .map_err(|e| format!("parse-error: invalid JSON in signature file: {e}"))?;
-    validate_signature_array(&parsed)?;
-    Ok(parsed)
-}
-
-fn extract_signature_from_interpret_output(
-    json: &str,
-) -> std::result::Result<serde_json::Value, String> {
-    let parsed: serde_json::Value = serde_json::from_str(json)
-        .map_err(|e| format!("parse-error: failed to parse interpret output as JSON: {e}"))?;
-    let signature = parsed
-        .get("signature")
-        .cloned()
-        .ok_or_else(|| "parse-error: interpret output missing 'signature' field".to_string())?;
-    validate_signature_array(&signature)?;
-    Ok(signature)
-}
-
-fn validate_generate_flags(
-    signature_file: Option<&PathBuf>,
-    no_interpret: bool,
-) -> std::result::Result<(), String> {
-    if signature_file.is_some() && no_interpret {
-        return Err("--signature-file and --no-interpret are mutually exclusive".to_string());
-    }
-    Ok(())
-}
-
 fn resolve_prompt(raw: &str) -> std::result::Result<String, (String, i32)> {
     if let Some(rest) = raw.strip_prefix("@@") {
         return Ok(format!("@{rest}"));
@@ -1043,106 +812,6 @@ fn resolve_prompt(raw: &str) -> std::result::Result<String, (String, i32)> {
         return Ok(content);
     }
     Ok(raw.to_string())
-}
-
-fn resolve_interpret_approval(
-    yes: bool,
-    stdin_is_tty: bool,
-) -> std::result::Result<ExecApprovalMode, String> {
-    if yes {
-        Ok(ExecApprovalMode::AllowAll)
-    } else if stdin_is_tty {
-        Ok(ExecApprovalMode::Prompt)
-    } else {
-        Err(
-            "interpret execCmd approval is required but stdin is not a TTY; pass --yes to auto-approve"
-                .to_string(),
-        )
-    }
-}
-
-fn run_interpret(engine: &Engine, prompt: &str, model: &str) -> Result<()> {
-    let api_key = env::var("ANTHROPIC_API_KEY")
-        .context("ANTHROPIC_API_KEY environment variable is required")?;
-
-    let args = serde_json::json!({
-        "prompt": prompt,
-        "model": model,
-        "apiKey": api_key,
-    });
-
-    let r = run_builtin_skill(
-        engine,
-        SKILL_INTERPRET_JS,
-        SCHEMA_INTERPRET_JS,
-        &args.to_string(),
-        ExecApprovalMode::Off,
-    )?;
-    match r {
-        Ok(json) => print_interpreted(&json)?,
-        Err(err) => {
-            eprintln!("agent error: [{:?}] {}", err.code, err.message);
-            std::process::exit(1);
-        }
-    }
-
-    Ok(())
-}
-
-fn print_interpreted(json: &str) -> Result<()> {
-    let v: serde_json::Value = serde_json::from_str(json)
-        .with_context(|| format!("failed to parse builtin skill output as JSON: {json}"))?;
-    let final_answer = v.get("finalAnswer").and_then(|c| c.as_str()).unwrap_or("");
-    let signature = v
-        .get("signature")
-        .and_then(|c| c.as_array())
-        .cloned()
-        .unwrap_or_default();
-    println!("final-answer: {final_answer}");
-    println!("signature:");
-    print!("[");
-    for (i, entry) in signature.iter().enumerate() {
-        if i > 0 {
-            print!(",");
-        }
-        println!();
-        let tool = entry.get("tool").and_then(|c| c.as_str()).unwrap_or("");
-        let input = entry.get("input").and_then(|c| c.as_str()).unwrap_or("");
-        let output = entry.get("output").and_then(|c| c.as_str()).unwrap_or("");
-        print!(
-            "  {{\"tool\": {}, \"input\": {}, \"output\": {}}}",
-            json_escape_string(tool),
-            json_escape_string(input),
-            json_escape_string(output)
-        );
-    }
-    if !signature.is_empty() {
-        println!();
-    }
-    println!("]");
-    Ok(())
-}
-
-fn json_escape_string(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
-    out.push('"');
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            '\x08' => out.push_str("\\b"),
-            '\x0c' => out.push_str("\\f"),
-            c if (c as u32) < 0x20 => {
-                out.push_str(&format!("\\u{:04x}", c as u32));
-            }
-            c => out.push(c),
-        }
-    }
-    out.push('"');
-    out
 }
 
 fn print_skill_error(err: &SkillError) {
@@ -1215,88 +884,6 @@ mod tests {
         assert!(schema_js.contains("\"userName\""));
         assert!(schema_js.contains("\"additionalProperties\": false"));
         let _ = fs::remove_dir_all(&tmp);
-    }
-
-    #[test]
-    fn validate_generate_flags_accepts_only_signature_file() {
-        let path = PathBuf::from("/tmp/sig.json");
-        validate_generate_flags(Some(&path), false).unwrap();
-    }
-
-    #[test]
-    fn validate_generate_flags_accepts_only_no_interpret() {
-        validate_generate_flags(None, true).unwrap();
-    }
-
-    #[test]
-    fn validate_generate_flags_accepts_neither() {
-        validate_generate_flags(None, false).unwrap();
-    }
-
-    #[test]
-    fn validate_generate_flags_rejects_both() {
-        let path = PathBuf::from("/tmp/sig.json");
-        let err = validate_generate_flags(Some(&path), true).unwrap_err();
-        assert!(
-            err.contains("--signature-file") && err.contains("--no-interpret"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn parse_approval_choice_recognizes_known_inputs() {
-        assert_eq!(parse_approval_choice("y\n"), Some(ApprovalChoice::Approve));
-        assert_eq!(
-            parse_approval_choice(" YES "),
-            Some(ApprovalChoice::Approve)
-        );
-        assert_eq!(parse_approval_choice("n"), Some(ApprovalChoice::Deny));
-        assert_eq!(parse_approval_choice("a"), Some(ApprovalChoice::AllowAll));
-        assert_eq!(parse_approval_choice("Quit"), Some(ApprovalChoice::Quit));
-    }
-
-    #[test]
-    fn parse_approval_choice_rejects_unknown_inputs() {
-        assert_eq!(parse_approval_choice(""), None);
-        assert_eq!(parse_approval_choice("maybe"), None);
-        assert_eq!(parse_approval_choice("ya"), None);
-    }
-
-    #[test]
-    fn format_user_denied_includes_cmd_and_args() {
-        let s = format_user_denied("gh", &["issue".into(), "view".into(), "73".into()]);
-        assert_eq!(s, "user-denied: gh \"issue\" \"view\" \"73\"");
-    }
-
-    #[test]
-    fn format_user_denied_with_no_args() {
-        assert_eq!(format_user_denied("ls", &[]), "user-denied: ls");
-    }
-
-    #[test]
-    fn resolve_interpret_approval_yes_returns_allow_all() {
-        assert_eq!(
-            resolve_interpret_approval(true, false).unwrap(),
-            ExecApprovalMode::AllowAll
-        );
-        assert_eq!(
-            resolve_interpret_approval(true, true).unwrap(),
-            ExecApprovalMode::AllowAll
-        );
-    }
-
-    #[test]
-    fn resolve_interpret_approval_tty_without_yes_returns_prompt() {
-        assert_eq!(
-            resolve_interpret_approval(false, true).unwrap(),
-            ExecApprovalMode::Prompt
-        );
-    }
-
-    #[test]
-    fn resolve_interpret_approval_non_tty_without_yes_errors() {
-        let err = resolve_interpret_approval(false, false).unwrap_err();
-        assert!(err.contains("--yes"), "unexpected error: {err}");
     }
 
     fn resolve_prompt_tmp_dir() -> PathBuf {
@@ -1385,86 +972,5 @@ mod tests {
         assert_eq!(code, 1);
         assert!(msg.contains("UTF-8"), "unexpected error: {msg}");
         let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn validate_signature_array_accepts_empty_array() {
-        validate_signature_array(&json!([])).unwrap();
-    }
-
-    #[test]
-    fn validate_signature_array_accepts_final_answer_only() {
-        let sig = json!([
-            {"tool": "finalAnswer", "input": "{\"result\":\"ok\"}", "output": ""}
-        ]);
-        validate_signature_array(&sig).unwrap();
-    }
-
-    #[test]
-    fn validate_signature_array_rejects_non_array() {
-        let err = validate_signature_array(&json!({"tool": "x"})).unwrap_err();
-        assert!(err.contains("not an array"), "unexpected error: {err}");
-    }
-
-    #[test]
-    fn validate_signature_array_rejects_non_object_entry() {
-        let err = validate_signature_array(&json!(["nope"])).unwrap_err();
-        assert!(err.contains("not an object"), "unexpected error: {err}");
-    }
-
-    #[test]
-    fn validate_signature_array_rejects_missing_field() {
-        let sig = json!([{"tool": "callLlm", "input": "{}"}]);
-        let err = validate_signature_array(&sig).unwrap_err();
-        assert!(err.contains("\"output\""), "unexpected error: {err}");
-    }
-
-    #[test]
-    fn validate_signature_array_rejects_non_string_field() {
-        let sig = json!([{"tool": "callLlm", "input": "{}", "output": 1}]);
-        let err = validate_signature_array(&sig).unwrap_err();
-        assert!(err.contains("\"output\""), "unexpected error: {err}");
-    }
-
-    #[test]
-    fn extract_signature_from_interpret_output_returns_signature_array() {
-        let json = json!({
-            "finalAnswer": "ok",
-            "signature": [
-                {"tool": "callLlm", "input": "{\"prompt\":\"p\"}", "output": "\"out\""},
-                {"tool": "finalAnswer", "input": "{\"result\":\"ok\"}", "output": ""}
-            ]
-        })
-        .to_string();
-        let sig = extract_signature_from_interpret_output(&json).unwrap();
-        let arr = sig.as_array().unwrap();
-        assert_eq!(arr.len(), 2);
-        assert_eq!(arr[0].get("tool").and_then(|v| v.as_str()), Some("callLlm"));
-    }
-
-    #[test]
-    fn extract_signature_from_interpret_output_errors_on_invalid_json() {
-        let err = extract_signature_from_interpret_output("not json").unwrap_err();
-        assert!(err.contains("parse-error"), "unexpected error: {err}");
-    }
-
-    #[test]
-    fn extract_signature_from_interpret_output_errors_when_signature_missing() {
-        let json = json!({"finalAnswer": "ok"}).to_string();
-        let err = extract_signature_from_interpret_output(&json).unwrap_err();
-        assert!(
-            err.contains("missing 'signature'"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn extract_signature_from_interpret_output_errors_on_invalid_entry_shape() {
-        let json = json!({
-            "signature": [{"tool": "callLlm"}]
-        })
-        .to_string();
-        let err = extract_signature_from_interpret_output(&json).unwrap_err();
-        assert!(err.contains("\"input\""), "unexpected error: {err}");
     }
 }

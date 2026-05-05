@@ -8,3 +8,8 @@ declare function invokeSkill<TOutput = unknown>(
   name: string,
   input?: unknown,
 ): Promise<TOutput>;
+
+declare module '*.md' {
+  const content: string;
+  export default content;
+}
