@@ -15,6 +15,7 @@ interface types {
     fs-error,
     user-error,
     depth-exceeded,
+    timeout,
   }
 }
 

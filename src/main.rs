@@ -2,11 +2,10 @@ use std::env;
 use std::fs;
 use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use wasmtime::component::{Component, Linker, ResourceTable, bindgen};
 use wasmtime::{Config, Engine, Store};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiView};
@@ -33,6 +32,7 @@ use skill_forge::runtime::types::{ErrorCode, Host as TypesHost};
 const RUNTIME_CWASM: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/skill-runtime.cwasm"));
 
 #[allow(dead_code)]
+const CODEGEN_SYSTEM_PROMPT: &str = include_str!("../agent/src/lib/SYSTEM_PROMPT.md");
 const SKILL_CALL_LLM_JS: &str = include_str!("../agent/dist/skills/call-llm/skill.js");
 const SKILL_GENERATE_SKILL_CODE_JS: &str =
     include_str!("../agent/dist/skills/generate-skill-code/skill.js");
@@ -104,10 +104,22 @@ enum Command {
         model: String,
         #[arg(long, default_value_t = false)]
         force: bool,
+        #[arg(long, value_enum)]
+        backend: Option<Backend>,
+        #[arg(long)]
+        timeout: Option<u64>,
     },
     #[command(hide = true)]
     McpServer,
 }
+
+#[derive(Copy, Clone, Eq, PartialEq, Debug, ValueEnum)]
+enum Backend {
+    Api,
+    Claude,
+}
+
+const DEFAULT_TIMEOUT_SECS: u64 = 60;
 
 #[derive(Copy, Clone, Eq, PartialEq)]
 enum Profile {
@@ -119,6 +131,8 @@ enum Profile {
 struct LlmConfig {
     model: String,
     api_key: String,
+    backend: Backend,
+    timeout: Duration,
 }
 
 struct SkillState {
@@ -170,12 +184,12 @@ impl LlmHost for SkillState {
                 ));
             }
         };
-        Ok(host_call_llm(
-            &prompt,
-            &input_json,
-            &cfg.model,
-            &cfg.api_key,
-        ))
+        let model = normalize_model(&cfg.model);
+        let result = match cfg.backend {
+            Backend::Api => host_call_llm(&prompt, &input_json, &model, &cfg.api_key, cfg.timeout),
+            Backend::Claude => claude_call_llm(&prompt, &input_json, &model, cfg.timeout),
+        };
+        Ok(result)
     }
 }
 
@@ -247,8 +261,13 @@ impl AnthropicHost for SkillState {
                 "capability-denied: anthropic-host is not available to user skills"
             ));
         }
+        let timeout = self
+            .llm_config
+            .as_ref()
+            .map(|c| c.timeout)
+            .unwrap_or_else(|| Duration::from_secs(DEFAULT_TIMEOUT_SECS));
         let started = Instant::now();
-        let r = anthropic_messages_blocking(&body_json, &api_key);
+        let r = anthropic_messages_blocking(&body_json, &api_key, timeout);
         log_trace("anthropic-host roundtrip", started);
         Ok(r)
     }
@@ -259,6 +278,7 @@ pub(crate) fn host_call_llm(
     input_json: &str,
     model: &str,
     api_key: &str,
+    timeout: Duration,
 ) -> std::result::Result<String, String> {
     const BENCH_MOCK_PROMPT: &str = "__BENCH_MOCK__";
     if prompt == BENCH_MOCK_PROMPT {
@@ -274,7 +294,7 @@ pub(crate) fn host_call_llm(
         "messages": [{"role": "user", "content": input_json}],
     })
     .to_string();
-    let raw = anthropic_messages_blocking(&body, api_key)?;
+    let raw = anthropic_messages_blocking(&body, api_key, timeout)?;
     let resp: serde_json::Value =
         serde_json::from_str(&raw).map_err(|e| format!("parse-error: {e}"))?;
     let content = resp
@@ -290,6 +310,26 @@ pub(crate) fn host_call_llm(
         }
     }
     Ok(text)
+}
+
+fn claude_call_llm(
+    prompt: &str,
+    input_json: &str,
+    model: &str,
+    timeout: Duration,
+) -> std::result::Result<String, String> {
+    const BENCH_MOCK_PROMPT: &str = "__BENCH_MOCK__";
+    if prompt == BENCH_MOCK_PROMPT {
+        return Ok(input_json.to_string());
+    }
+    let combined = format!("[system]\n{prompt}\n\n[user]\n{input_json}");
+    let args = vec![
+        "-p".to_string(),
+        "--model".to_string(),
+        model.to_string(),
+        combined,
+    ];
+    run_with_timeout("claude", &args, timeout)
 }
 
 pub(crate) fn exec_cmd_impl(cmd: &str, args: &[String]) -> std::result::Result<String, String> {
@@ -308,14 +348,15 @@ pub(crate) fn exec_cmd_impl(cmd: &str, args: &[String]) -> std::result::Result<S
         .map_err(|e| format!("exec-error: stdout is not valid UTF-8: {e}"))
 }
 
-static HTTP: OnceLock<reqwest::blocking::Client> = OnceLock::new();
-
-fn anthropic_messages_blocking(body: &str, api_key: &str) -> std::result::Result<String, String> {
-    let client = HTTP.get_or_init(|| {
-        reqwest::blocking::Client::builder()
-            .build()
-            .expect("failed to construct reqwest client")
-    });
+fn anthropic_messages_blocking(
+    body: &str,
+    api_key: &str,
+    timeout: Duration,
+) -> std::result::Result<String, String> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(timeout)
+        .build()
+        .map_err(|e| format!("network-error: failed to build client: {e}"))?;
     let resp = client
         .post("https://api.anthropic.com/v1/messages")
         .header("content-type", "application/json")
@@ -323,7 +364,16 @@ fn anthropic_messages_blocking(body: &str, api_key: &str) -> std::result::Result
         .header("anthropic-version", "2023-06-01")
         .body(body.to_string())
         .send()
-        .map_err(|e| format!("network-error: {e}"))?;
+        .map_err(|e| {
+            if e.is_timeout() {
+                format!(
+                    "timeout: anthropic-host did not respond within {:?}",
+                    timeout
+                )
+            } else {
+                format!("network-error: {e}")
+            }
+        })?;
     let status = resp.status();
     let text = resp.text().map_err(|e| format!("network-error: {e}"))?;
     if !status.is_success() {
@@ -350,8 +400,67 @@ fn main() -> Result<()> {
             name,
             model,
             force,
-        } => run_generate(&engine, &prompt, &name, &model, force),
+            backend,
+            timeout,
+        } => {
+            let backend = resolve_backend(backend);
+            let timeout = resolve_timeout(timeout);
+            run_generate(&engine, &prompt, &name, &model, force, backend, timeout)
+        }
         Command::McpServer => mcp::run(),
+    }
+}
+
+fn resolve_backend(flag: Option<Backend>) -> Backend {
+    if let Some(b) = flag {
+        return b;
+    }
+    if let Ok(value) = env::var("SKILL_FORGE_BACKEND") {
+        return match value.as_str() {
+            "api" => Backend::Api,
+            "claude" => Backend::Claude,
+            other => {
+                eprintln!(
+                    "Error: SKILL_FORGE_BACKEND: invalid value '{other}' (expected 'api' or 'claude')"
+                );
+                std::process::exit(2);
+            }
+        };
+    }
+    if which_claude_present() {
+        Backend::Claude
+    } else {
+        Backend::Api
+    }
+}
+
+fn which_claude_present() -> bool {
+    std::process::Command::new("which")
+        .arg("claude")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+fn resolve_timeout(flag: Option<u64>) -> Duration {
+    let secs = flag
+        .or_else(|| {
+            env::var("SKILL_FORGE_TIMEOUT")
+                .ok()
+                .and_then(|s| s.parse::<u64>().ok())
+        })
+        .unwrap_or(DEFAULT_TIMEOUT_SECS);
+    Duration::from_secs(secs)
+}
+
+fn normalize_model(model: &str) -> String {
+    match model {
+        "sonnet" => "claude-sonnet-4-6".to_string(),
+        "opus" => "claude-opus-4-7".to_string(),
+        "haiku" => "claude-haiku-4-5".to_string(),
+        _ => model.to_string(),
     }
 }
 
@@ -401,10 +510,19 @@ fn instantiate(
 }
 
 fn run_skill_run(engine: &Engine, raw_argv: Vec<String>) -> Result<()> {
-    let (skill_path, model, skill_flag_argv) = parse_run_argv(raw_argv);
+    let RunArgs {
+        skill_path,
+        model,
+        backend,
+        timeout,
+        skill_flags: skill_flag_argv,
+    } = parse_run_argv(raw_argv);
 
-    let api_key = env::var("ANTHROPIC_API_KEY")
-        .context("ANTHROPIC_API_KEY environment variable is required")?;
+    let api_key = match backend {
+        Backend::Api => env::var("ANTHROPIC_API_KEY")
+            .context("ANTHROPIC_API_KEY environment variable is required")?,
+        Backend::Claude => env::var("ANTHROPIC_API_KEY").unwrap_or_default(),
+    };
 
     let source = fs::read_to_string(&skill_path)
         .with_context(|| format!("failed to read skill source: {}", skill_path.display()))?;
@@ -421,7 +539,12 @@ fn run_skill_run(engine: &Engine, raw_argv: Vec<String>) -> Result<()> {
         source,
         schema_source,
         Profile::User,
-        Some(LlmConfig { model, api_key }),
+        Some(LlmConfig {
+            model,
+            api_key,
+            backend,
+            timeout,
+        }),
         0,
     )?;
 
@@ -523,10 +646,20 @@ fn build_input_args_json(
     }
 }
 
-fn parse_run_argv(argv: Vec<String>) -> (PathBuf, String, Vec<String>) {
+struct RunArgs {
+    skill_path: PathBuf,
+    model: String,
+    backend: Backend,
+    timeout: Duration,
+    skill_flags: Vec<String>,
+}
+
+fn parse_run_argv(argv: Vec<String>) -> RunArgs {
     let mut skill: Option<PathBuf> = None;
     let mut name: Option<String> = None;
     let mut model: Option<String> = None;
+    let mut backend_flag: Option<Backend> = None;
+    let mut timeout_flag: Option<u64> = None;
     let mut skill_flags: Vec<String> = Vec::new();
 
     let mut i = 0;
@@ -559,6 +692,40 @@ fn parse_run_argv(argv: Vec<String>) -> (PathBuf, String, Vec<String>) {
                     }
                 };
                 model = Some(value);
+                i += 2;
+            }
+            "--backend" => {
+                let value = match argv.get(i + 1) {
+                    Some(v) => v.clone(),
+                    None => {
+                        eprintln!("Error: --backend: missing value");
+                        std::process::exit(2);
+                    }
+                };
+                backend_flag = Some(match value.as_str() {
+                    "api" => Backend::Api,
+                    "claude" => Backend::Claude,
+                    other => {
+                        eprintln!(
+                            "Error: --backend: invalid value '{other}' (expected 'api' or 'claude')"
+                        );
+                        std::process::exit(2);
+                    }
+                });
+                i += 2;
+            }
+            "--timeout" => {
+                let value = match argv.get(i + 1) {
+                    Some(v) => v.clone(),
+                    None => {
+                        eprintln!("Error: --timeout: missing value");
+                        std::process::exit(2);
+                    }
+                };
+                timeout_flag = Some(value.parse::<u64>().unwrap_or_else(|_| {
+                    eprintln!("Error: --timeout: invalid integer '{value}'");
+                    std::process::exit(2);
+                }));
                 i += 2;
             }
             t if t == "--args" || t.starts_with("--args=") => {
@@ -602,7 +769,13 @@ fn parse_run_argv(argv: Vec<String>) -> (PathBuf, String, Vec<String>) {
         std::process::exit(2);
     });
 
-    (skill_path, model, skill_flags)
+    RunArgs {
+        skill_path,
+        model,
+        backend: resolve_backend(backend_flag),
+        timeout: resolve_timeout(timeout_flag),
+        skill_flags,
+    }
 }
 
 fn schema_path_for(skill_path: &PathBuf) -> PathBuf {
@@ -638,7 +811,15 @@ fn run_builtin_skill(
     Ok(r)
 }
 
-fn run_generate(engine: &Engine, prompt: &str, name: &str, model: &str, force: bool) -> Result<()> {
+fn run_generate(
+    engine: &Engine,
+    prompt: &str,
+    name: &str,
+    model: &str,
+    force: bool,
+    backend: Backend,
+    timeout: Duration,
+) -> Result<()> {
     if let Err(msg) = validate_skill_name(name) {
         eprintln!("Error: --name: {msg}");
         std::process::exit(2);
@@ -652,8 +833,11 @@ fn run_generate(engine: &Engine, prompt: &str, name: &str, model: &str, force: b
     };
     let prompt = resolved_prompt.as_str();
 
-    let api_key = env::var("ANTHROPIC_API_KEY")
-        .context("ANTHROPIC_API_KEY environment variable is required")?;
+    let api_key = match backend {
+        Backend::Api => env::var("ANTHROPIC_API_KEY")
+            .context("ANTHROPIC_API_KEY environment variable is required")?,
+        Backend::Claude => env::var("ANTHROPIC_API_KEY").unwrap_or_default(),
+    };
 
     let skill_dir = skill_dir_for_name(name)?;
     if skill_dir.exists() && !force {
@@ -665,32 +849,12 @@ fn run_generate(engine: &Engine, prompt: &str, name: &str, model: &str, force: b
     }
 
     println!("generating skill code...");
-    let args_json = serde_json::json!({
-        "prompt": prompt,
-        "model": model,
-        "apiKey": api_key,
-    })
-    .to_string();
+    let model_normalized = normalize_model(model);
 
-    let r = run_builtin_skill(
-        engine,
-        SKILL_GENERATE_SKILL_CODE_JS,
-        SCHEMA_GENERATE_SKILL_CODE_JS,
-        &args_json,
-        Some(LlmConfig {
-            model: model.to_string(),
-            api_key: api_key.clone(),
-        }),
-    )?;
-    let json = match r {
-        Ok(j) => j,
-        Err(err) => {
-            eprintln!("agent error: [{:?}] {}", err.code, err.message);
-            std::process::exit(1);
-        }
+    let (code, capabilities, schema) = match backend {
+        Backend::Api => generate_via_api(engine, prompt, &model_normalized, &api_key, timeout)?,
+        Backend::Claude => generate_via_claude(prompt, &model_normalized, &api_key, timeout)?,
     };
-
-    let (code, capabilities, schema) = parse_generated(&json)?;
     if let Err(msg) = generated_schema::validate(&schema) {
         eprintln!("Error: generated schema invalid: {msg}");
         std::process::exit(1);
@@ -709,6 +873,219 @@ fn run_generate(engine: &Engine, prompt: &str, name: &str, model: &str, force: b
     print_generate_summary(&skill_dir, &capabilities, name, model);
 
     Ok(())
+}
+
+fn generate_via_api(
+    engine: &Engine,
+    prompt: &str,
+    model: &str,
+    api_key: &str,
+    timeout: Duration,
+) -> Result<(String, Vec<String>, serde_json::Value)> {
+    let args_json = serde_json::json!({
+        "prompt": prompt,
+        "model": model,
+        "apiKey": api_key,
+    })
+    .to_string();
+    let r = run_builtin_skill(
+        engine,
+        SKILL_GENERATE_SKILL_CODE_JS,
+        SCHEMA_GENERATE_SKILL_CODE_JS,
+        &args_json,
+        Some(LlmConfig {
+            model: model.to_string(),
+            api_key: api_key.to_string(),
+            backend: Backend::Api,
+            timeout,
+        }),
+    )?;
+    let json = match r {
+        Ok(j) => j,
+        Err(err) => {
+            eprintln!("agent error: [{:?}] {}", err.code, err.message);
+            std::process::exit(1);
+        }
+    };
+    parse_generated(&json)
+}
+
+fn generate_via_claude(
+    prompt: &str,
+    model: &str,
+    api_key: &str,
+    timeout: Duration,
+) -> Result<(String, Vec<String>, serde_json::Value)> {
+    let cfg = mcp_config_for_self(api_key)?;
+    let cfg_path = write_tmp_mcp_config(&cfg)?;
+
+    let exe =
+        env::current_exe().context("failed to determine current executable path for self-spawn")?;
+    let exe_str = exe.to_string_lossy().to_string();
+
+    let combined_prompt = format!("{CODEGEN_SYSTEM_PROMPT}\n\n# Task\n\n{prompt}");
+
+    let args = vec![
+        "-p".to_string(),
+        "--bare".to_string(),
+        "--strict-mcp-config".to_string(),
+        "--mcp-config".to_string(),
+        cfg_path.to_string_lossy().to_string(),
+        "--disallowedTools".to_string(),
+        "Bash Edit Read".to_string(),
+        "--output-format".to_string(),
+        "stream-json".to_string(),
+        "--verbose".to_string(),
+        "--model".to_string(),
+        model.to_string(),
+        combined_prompt,
+    ];
+
+    let stdout = run_with_timeout("claude", &args, timeout)
+        .map_err(|e| anyhow::anyhow!("claude backend: {e}"))?;
+    let _ = fs::remove_file(&cfg_path);
+
+    let submit = extract_submit_from_stream(&stdout, exe_str.as_str()).ok_or_else(|| {
+        anyhow::anyhow!("claude backend: submit_generated_code not found in stream")
+    })?;
+
+    parse_submit_input(&submit)
+}
+
+fn mcp_config_for_self(api_key: &str) -> Result<String> {
+    let exe =
+        env::current_exe().context("failed to determine current executable path for self-spawn")?;
+    let env_obj = if api_key.is_empty() {
+        serde_json::json!({})
+    } else {
+        serde_json::json!({ "ANTHROPIC_API_KEY": api_key })
+    };
+    Ok(serde_json::json!({
+        "mcpServers": {
+            "skill-forge": {
+                "command": exe.to_string_lossy(),
+                "args": ["mcp-server"],
+                "env": env_obj,
+            }
+        }
+    })
+    .to_string())
+}
+
+fn write_tmp_mcp_config(content: &str) -> Result<PathBuf> {
+    let dir = std::env::temp_dir();
+    let pid = std::process::id();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let path = dir.join(format!("skill-forge-mcp-{pid}-{nanos}.json"));
+    fs::write(&path, content)
+        .with_context(|| format!("failed to write tmp mcp-config to {}", path.display()))?;
+    Ok(path)
+}
+
+fn extract_submit_from_stream(stdout: &str, _exe: &str) -> Option<serde_json::Value> {
+    for line in stdout.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let v: serde_json::Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if v.get("type").and_then(|t| t.as_str()) != Some("assistant") {
+            continue;
+        }
+        let content = match v.pointer("/message/content").and_then(|c| c.as_array()) {
+            Some(a) => a,
+            None => continue,
+        };
+        for block in content {
+            if block.get("type").and_then(|t| t.as_str()) != Some("tool_use") {
+                continue;
+            }
+            let name = block.get("name").and_then(|n| n.as_str()).unwrap_or("");
+            if name.ends_with("submit_generated_code") {
+                if let Some(input) = block.get("input") {
+                    return Some(input.clone());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn parse_submit_input(
+    input: &serde_json::Value,
+) -> Result<(String, Vec<String>, serde_json::Value)> {
+    let code = input
+        .get("code")
+        .and_then(|c| c.as_str())
+        .ok_or_else(|| anyhow::anyhow!("submit_generated_code: missing 'code' string"))?
+        .to_string();
+    let capabilities = input
+        .get("capabilities")
+        .and_then(|c| c.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect::<Vec<String>>()
+        })
+        .ok_or_else(|| anyhow::anyhow!("submit_generated_code: missing 'capabilities' array"))?;
+    let schema = input
+        .get("schema")
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("submit_generated_code: missing 'schema' object"))?;
+    Ok((code, capabilities, schema))
+}
+
+fn run_with_timeout(
+    cmd: &str,
+    args: &[String],
+    timeout: Duration,
+) -> std::result::Result<String, String> {
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new(cmd)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .map_err(|e| format!("spawn {cmd}: {e}"))?;
+
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let mut stdout = String::new();
+                if let Some(mut out) = child.stdout.take() {
+                    use std::io::Read;
+                    let _ = out.read_to_string(&mut stdout);
+                }
+                if !status.success() {
+                    return Err(format!("{cmd} exited with status {status}",));
+                }
+                return Ok(stdout);
+            }
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!(
+                        "timeout: {cmd} did not finish within {:?}",
+                        timeout
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => {
+                return Err(format!("wait {cmd}: {e}"));
+            }
+        }
+    }
 }
 
 fn validate_skill_name(name: &str) -> std::result::Result<(), String> {

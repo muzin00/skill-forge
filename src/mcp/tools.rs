@@ -1,6 +1,9 @@
+use std::time::Duration;
+
 use serde_json::{Value, json};
 
 const DEFAULT_LLM_MODEL: &str = "claude-sonnet-4-6";
+const DEFAULT_TIMEOUT_SECS: u64 = 60;
 
 pub fn tool_specs() -> Value {
     json!([
@@ -71,7 +74,17 @@ fn call_llm(args: &Value) -> Result<String, String> {
     let model = std::env::var("MCP_LLM_MODEL").unwrap_or_else(|_| DEFAULT_LLM_MODEL.to_string());
     let api_key = std::env::var("ANTHROPIC_API_KEY")
         .map_err(|_| "ANTHROPIC_API_KEY env var not set".to_string())?;
-    crate::host_call_llm(prompt, &input_json, &model, &api_key)
+    let timeout_secs = std::env::var("SKILL_FORGE_TIMEOUT")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_TIMEOUT_SECS);
+    crate::host_call_llm(
+        prompt,
+        &input_json,
+        &model,
+        &api_key,
+        Duration::from_secs(timeout_secs),
+    )
 }
 
 fn exec_cmd(args: &Value) -> Result<String, String> {
