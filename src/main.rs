@@ -614,6 +614,7 @@ fn run_builtin_skill(
     skill_source: &str,
     schema_source: &str,
     args_json: &str,
+    llm_config: Option<LlmConfig>,
 ) -> Result<std::result::Result<String, SkillError>> {
     let component = deserialize_runtime_component(engine)?;
     let linker = build_linker(engine)?;
@@ -624,7 +625,7 @@ fn run_builtin_skill(
         skill_source.to_string(),
         schema_source.to_string(),
         Profile::Builtin,
-        None,
+        llm_config,
         0,
     )?;
     let started = Instant::now();
@@ -672,6 +673,10 @@ fn run_generate(engine: &Engine, prompt: &str, name: &str, model: &str, force: b
         SKILL_GENERATE_SKILL_CODE_JS,
         SCHEMA_GENERATE_SKILL_CODE_JS,
         &args_json,
+        Some(LlmConfig {
+            model: model.to_string(),
+            api_key: api_key.clone(),
+        }),
     )?;
     let json = match r {
         Ok(j) => j,
