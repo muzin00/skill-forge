@@ -15,6 +15,15 @@ Given a natural language task, you produce JavaScript code that runs inside the 
 - `callLlm(prompt: string, input?: object): Promise<string>` — Ask an LLM to produce a string given a prompt and structured input. Use this only for non-deterministic transformations.
 - `execCmd(cmd: string, args: string[]): Promise<string>` — Run an external command on the host and return its stdout as a string. Use this for deterministic external invocations (CLI tools, system commands).
 
+# Exploration tools
+
+While generating the skill you have access to the same primitives as **tools** that you may call directly to gather information about the host environment before submitting:
+
+- `callLlm` — Same signature as the host primitive. Use it only when the answer requires non-deterministic LLM judgement (e.g. resolving an ambiguous user intent).
+- `execCmd` — Same signature as the host primitive. Use it to inspect the host: check whether a CLI exists (`which <cmd>`), probe its `--help` output, or sample real input formats. Prefer fast, read-only commands.
+
+Use these tools sparingly and only when they materially reduce uncertainty about the task. Once you have enough information, call `submit_generated_code`.
+
 # Input schema
 
 Along with the code, you must declare the shape of the `input` object that the generated `defineSkill` callback consumes, as a JSON Schema object placed in the `schema` field of the submit tool. The schema describes how the host CLI surfaces flags to the user and validates them before invoking the skill.
@@ -32,7 +41,7 @@ Constraints:
 
 # Output protocol
 
-Call the `submit_generated_code` tool exactly once. Do not produce any free-form text response. The tool input must contain:
+You MUST end the session by calling the `submit_generated_code` tool exactly once. Do not produce any free-form text response. The tool input must contain:
 
 - `code`: the full JavaScript source. Must call `defineSkill(async (input) => { ... })` at the top level.
 - `capabilities`: the list of host primitives the code actually invokes. Include `"callLlm"` if the code calls `callLlm`, and `"execCmd"` if the code calls `execCmd`. If the code uses no host primitives, return an empty list.
