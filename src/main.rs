@@ -110,13 +110,22 @@ enum Command {
         timeout: Option<u64>,
     },
     #[command(hide = true)]
-    McpServer,
+    McpServer {
+        #[arg(long, value_enum, default_value_t = McpMode::Codegen)]
+        mode: McpMode,
+    },
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug, ValueEnum)]
 enum Backend {
     Api,
     Claude,
+}
+
+#[derive(Copy, Clone, Eq, PartialEq, Debug, ValueEnum)]
+pub enum McpMode {
+    Codegen,
+    Skills,
 }
 
 const DEFAULT_TIMEOUT_SECS: u64 = 60;
@@ -407,7 +416,7 @@ fn main() -> Result<()> {
             let timeout = resolve_timeout(timeout);
             run_generate(&engine, &prompt, &name, &model, force, backend, timeout)
         }
-        Command::McpServer => mcp::run(),
+        Command::McpServer { mode } => mcp::run(mode, &engine),
     }
 }
 
@@ -784,6 +793,79 @@ fn schema_path_for(skill_path: &PathBuf) -> PathBuf {
         .map(|p| p.to_path_buf())
         .unwrap_or_else(PathBuf::new)
         .join("schema.js")
+}
+
+pub(crate) fn evaluate_schema_for_mcp(
+    engine: &Engine,
+    skill_source: &str,
+    schema_source: &str,
+) -> Result<serde_json::Value> {
+    let component = deserialize_runtime_component(engine)?;
+    let linker = build_linker(engine)?;
+    let (mut store, runtime) = instantiate(
+        engine,
+        &component,
+        &linker,
+        skill_source.to_string(),
+        schema_source.to_string(),
+        Profile::User,
+        None,
+        0,
+    )?;
+    let schema_result = runtime.call_get_schema(&mut store)?;
+    let schema_json = match schema_result {
+        Ok(j) => j,
+        Err(err) => anyhow::bail!("get-schema failed: [{:?}] {}", err.code, err.message),
+    };
+    let envelope: serde_json::Value = serde_json::from_str(&schema_json)
+        .with_context(|| format!("failed to parse schema JSON: {schema_json}"))?;
+    Ok(envelope)
+}
+
+pub(crate) fn run_skill_for_mcp(
+    engine: &Engine,
+    skill_source: &str,
+    schema_source: &str,
+    args_json: &str,
+) -> std::result::Result<String, String> {
+    let component = deserialize_runtime_component(engine)
+        .map_err(|e| format!("runtime component init failed: {e}"))?;
+    let linker = build_linker(engine).map_err(|e| format!("linker build failed: {e}"))?;
+    let llm_config = mcp_skills_llm_config();
+    let (mut store, runtime) = instantiate(
+        engine,
+        &component,
+        &linker,
+        skill_source.to_string(),
+        schema_source.to_string(),
+        Profile::User,
+        llm_config,
+        0,
+    )
+    .map_err(|e| format!("instantiate failed: {e}"))?;
+    let r = runtime
+        .call_run(&mut store, args_json)
+        .map_err(|e| format!("call_run trapped: {e}"))?;
+    match r {
+        Ok(j) => Ok(j),
+        Err(err) => Err(format!("[{:?}] {}", err.code, err.message)),
+    }
+}
+
+fn mcp_skills_llm_config() -> Option<LlmConfig> {
+    let api_key = env::var("ANTHROPIC_API_KEY").unwrap_or_default();
+    let backend = resolve_backend(None);
+    if matches!(backend, Backend::Api) && api_key.is_empty() {
+        return None;
+    }
+    let model = env::var("SKILL_FORGE_MODEL").unwrap_or_else(|_| "claude-sonnet-4-6".to_string());
+    let timeout = resolve_timeout(None);
+    Some(LlmConfig {
+        model,
+        api_key,
+        backend,
+        timeout,
+    })
 }
 
 fn run_builtin_skill(
@@ -1211,6 +1293,45 @@ fn print_skill_error(err: &SkillError) {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn mcp_server_default_mode_is_codegen() {
+        let parsed = Args::try_parse_from(["skill-forge", "mcp-server"]).unwrap();
+        match parsed.command {
+            Command::McpServer { mode } => assert_eq!(mode, McpMode::Codegen),
+            other => panic!("expected McpServer command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn mcp_server_accepts_explicit_codegen_mode() {
+        let parsed =
+            Args::try_parse_from(["skill-forge", "mcp-server", "--mode", "codegen"]).unwrap();
+        match parsed.command {
+            Command::McpServer { mode } => assert_eq!(mode, McpMode::Codegen),
+            other => panic!("expected McpServer command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn mcp_server_accepts_skills_mode() {
+        let parsed =
+            Args::try_parse_from(["skill-forge", "mcp-server", "--mode", "skills"]).unwrap();
+        match parsed.command {
+            Command::McpServer { mode } => assert_eq!(mode, McpMode::Skills),
+            other => panic!("expected McpServer command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn mcp_server_rejects_unknown_mode() {
+        let err = Args::try_parse_from(["skill-forge", "mcp-server", "--mode", "bogus"])
+            .expect_err("expected parse error");
+        assert!(
+            err.to_string().contains("bogus") || err.to_string().contains("invalid"),
+            "expected error to mention invalid value; got: {err}"
+        );
+    }
 
     #[test]
     fn parse_generated_returns_code_capabilities_and_schema() {

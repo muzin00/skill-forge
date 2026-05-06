@@ -2,8 +2,21 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
+use super::server::ToolHandler;
+
 const DEFAULT_LLM_MODEL: &str = "claude-sonnet-4-6";
 const DEFAULT_TIMEOUT_SECS: u64 = 60;
+
+pub struct CodegenHandler;
+
+impl ToolHandler for CodegenHandler {
+    fn tool_specs(&self) -> Value {
+        tool_specs()
+    }
+    fn call(&mut self, name: &str, args: &Value) -> Result<Value, String> {
+        handle_call(name, args)
+    }
+}
 
 pub fn tool_specs() -> Value {
     json!([
