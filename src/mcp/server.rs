@@ -2,11 +2,14 @@ use std::io::{self, BufRead, Write};
 
 use serde_json::{Value, json};
 
-use super::tools;
-
 const PROTOCOL_VERSION: &str = "2024-11-05";
 
-pub fn run() -> anyhow::Result<()> {
+pub trait ToolHandler {
+    fn tool_specs(&self) -> Value;
+    fn call(&mut self, name: &str, args: &Value) -> Result<Value, String>;
+}
+
+pub fn run(handler: &mut dyn ToolHandler) -> anyhow::Result<()> {
     let stdin = io::stdin();
     let stdout = io::stdout();
     let mut out = stdout.lock();
@@ -28,12 +31,18 @@ pub fn run() -> anyhow::Result<()> {
         };
         let method = req.get("method").and_then(Value::as_str).unwrap_or("");
         let id = req.get("id").cloned();
-        handle(&mut out, method, id, req.get("params").cloned());
+        handle(&mut out, handler, method, id, req.get("params").cloned());
     }
     Ok(())
 }
 
-fn handle(out: &mut impl Write, method: &str, id: Option<Value>, params: Option<Value>) {
+fn handle(
+    out: &mut impl Write,
+    handler: &mut dyn ToolHandler,
+    method: &str,
+    id: Option<Value>,
+    params: Option<Value>,
+) {
     match method {
         "initialize" => {
             let result = json!({
@@ -47,14 +56,14 @@ fn handle(out: &mut impl Write, method: &str, id: Option<Value>, params: Option<
             // notification: no response
         }
         "tools/list" => {
-            let result = json!({ "tools": tools::tool_specs() });
+            let result = json!({ "tools": handler.tool_specs() });
             respond_request(out, id, result);
         }
         "tools/call" => {
             let params = params.unwrap_or(json!({}));
             let name = params.get("name").and_then(Value::as_str).unwrap_or("");
             let args = params.get("arguments").cloned().unwrap_or(json!({}));
-            match tools::handle_call(name, &args) {
+            match handler.call(name, &args) {
                 Ok(result) => respond_request(out, id, result),
                 Err(msg) => respond_error(out, id.unwrap_or(Value::Null), -32602, &msg),
             }
