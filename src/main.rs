@@ -44,6 +44,8 @@ const SKILL_VERIFY_REFERENCES_JS: &str =
 const SKILL_READ_FILE_JS: &str = include_str!("../agent/dist/skills/read-file/skill.js");
 const SKILL_GREP_FILE_JS: &str = include_str!("../agent/dist/skills/grep-file/skill.js");
 const SKILL_LOOP_LLM_JS: &str = include_str!("../agent/dist/skills/loop-llm/skill.js");
+const SKILL_IMPLEMENTATION_CHECK_JS: &str =
+    include_str!("../agent/dist/skills/implementation-check/skill.js");
 
 const SCHEMA_CALL_LLM_JS: &str = include_str!("../agent/dist/skills/call-llm/schema.js");
 const SCHEMA_GENERATE_SKILL_CODE_JS: &str =
@@ -56,6 +58,8 @@ const SCHEMA_VERIFY_REFERENCES_JS: &str =
 const SCHEMA_READ_FILE_JS: &str = include_str!("../agent/dist/skills/read-file/schema.js");
 const SCHEMA_GREP_FILE_JS: &str = include_str!("../agent/dist/skills/grep-file/schema.js");
 const SCHEMA_LOOP_LLM_JS: &str = include_str!("../agent/dist/skills/loop-llm/schema.js");
+const SCHEMA_IMPLEMENTATION_CHECK_JS: &str =
+    include_str!("../agent/dist/skills/implementation-check/schema.js");
 
 const DESC_CALL_LLM: &str = include_str!("../agent/src/skills/call-llm/DESCRIPTION.md");
 const DESC_GENERATE_SKILL_CODE: &str =
@@ -68,6 +72,8 @@ const DESC_VERIFY_REFERENCES: &str =
 const DESC_READ_FILE: &str = include_str!("../agent/src/skills/read-file/DESCRIPTION.md");
 const DESC_GREP_FILE: &str = include_str!("../agent/src/skills/grep-file/DESCRIPTION.md");
 const DESC_LOOP_LLM: &str = include_str!("../agent/src/skills/loop-llm/DESCRIPTION.md");
+const DESC_IMPLEMENTATION_CHECK: &str =
+    include_str!("../agent/src/skills/implementation-check/DESCRIPTION.md");
 
 const MAX_INVOKE_DEPTH: usize = 8;
 
@@ -110,6 +116,12 @@ const BUILTIN_SKILLS: &[(&str, &str, &str, &str)] = &[
         SKILL_LOOP_LLM_JS,
         SCHEMA_LOOP_LLM_JS,
         DESC_LOOP_LLM,
+    ),
+    (
+        "implementation-check",
+        SKILL_IMPLEMENTATION_CHECK_JS,
+        SCHEMA_IMPLEMENTATION_CHECK_JS,
+        DESC_IMPLEMENTATION_CHECK,
     ),
 ];
 

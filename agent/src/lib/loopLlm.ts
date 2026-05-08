@@ -96,7 +96,7 @@ function buildTools(
   tools.push({
     name: OUTPUT_TOOL_NAME,
     description:
-      'Submit the final structured result. Call this exactly ONCE when you have completed the task. After this call, the loop terminates.',
+      'Submit the final structured result and terminate the loop. You MUST call this tool exactly ONCE when you have gathered enough information to answer. Do not keep exploring indefinitely — once you have a reasonable conclusion, submit it via this tool. The loop will fail with `loop-exceeded` if you do not call this tool within the iteration budget.',
     input_schema: outputSchema,
   });
   return tools;

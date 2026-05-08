@@ -22,6 +22,7 @@ fn main() {
         "read-file",
         "grep-file",
         "loop-llm",
+        "implementation-check",
     ] {
         println!("cargo:rerun-if-changed=agent/dist/skills/{skill}/skill.js");
         println!("cargo:rerun-if-changed=agent/dist/skills/{skill}/schema.js");
