@@ -41,6 +41,9 @@ const SKILL_ERROR_JS: &str = include_str!("../agent/dist/skills/error/skill.js")
 const SKILL_COMPOSE_JS: &str = include_str!("../agent/dist/skills/compose/skill.js");
 const SKILL_VERIFY_REFERENCES_JS: &str =
     include_str!("../agent/dist/skills/verify-references/skill.js");
+const SKILL_READ_FILE_JS: &str = include_str!("../agent/dist/skills/read-file/skill.js");
+const SKILL_GREP_FILE_JS: &str = include_str!("../agent/dist/skills/grep-file/skill.js");
+const SKILL_LOOP_LLM_JS: &str = include_str!("../agent/dist/skills/loop-llm/skill.js");
 
 const SCHEMA_CALL_LLM_JS: &str = include_str!("../agent/dist/skills/call-llm/schema.js");
 const SCHEMA_GENERATE_SKILL_CODE_JS: &str =
@@ -50,31 +53,78 @@ const SCHEMA_ERROR_JS: &str = include_str!("../agent/dist/skills/error/schema.js
 const SCHEMA_COMPOSE_JS: &str = include_str!("../agent/dist/skills/compose/schema.js");
 const SCHEMA_VERIFY_REFERENCES_JS: &str =
     include_str!("../agent/dist/skills/verify-references/schema.js");
+const SCHEMA_READ_FILE_JS: &str = include_str!("../agent/dist/skills/read-file/schema.js");
+const SCHEMA_GREP_FILE_JS: &str = include_str!("../agent/dist/skills/grep-file/schema.js");
+const SCHEMA_LOOP_LLM_JS: &str = include_str!("../agent/dist/skills/loop-llm/schema.js");
+
+const DESC_CALL_LLM: &str = include_str!("../agent/src/skills/call-llm/DESCRIPTION.md");
+const DESC_GENERATE_SKILL_CODE: &str =
+    include_str!("../agent/src/skills/generate-skill-code/DESCRIPTION.md");
+const DESC_ECHO: &str = include_str!("../agent/src/skills/echo/DESCRIPTION.md");
+const DESC_ERROR: &str = include_str!("../agent/src/skills/error/DESCRIPTION.md");
+const DESC_COMPOSE: &str = include_str!("../agent/src/skills/compose/DESCRIPTION.md");
+const DESC_VERIFY_REFERENCES: &str =
+    include_str!("../agent/src/skills/verify-references/DESCRIPTION.md");
+const DESC_READ_FILE: &str = include_str!("../agent/src/skills/read-file/DESCRIPTION.md");
+const DESC_GREP_FILE: &str = include_str!("../agent/src/skills/grep-file/DESCRIPTION.md");
+const DESC_LOOP_LLM: &str = include_str!("../agent/src/skills/loop-llm/DESCRIPTION.md");
 
 const MAX_INVOKE_DEPTH: usize = 8;
 
-const BUILTIN_SKILLS: &[(&str, &str, &str)] = &[
-    ("call-llm", SKILL_CALL_LLM_JS, SCHEMA_CALL_LLM_JS),
+const BUILTIN_SKILLS: &[(&str, &str, &str, &str)] = &[
+    (
+        "call-llm",
+        SKILL_CALL_LLM_JS,
+        SCHEMA_CALL_LLM_JS,
+        DESC_CALL_LLM,
+    ),
     (
         "generate-skill-code",
         SKILL_GENERATE_SKILL_CODE_JS,
         SCHEMA_GENERATE_SKILL_CODE_JS,
+        DESC_GENERATE_SKILL_CODE,
     ),
-    ("echo", SKILL_ECHO_JS, SCHEMA_ECHO_JS),
-    ("error", SKILL_ERROR_JS, SCHEMA_ERROR_JS),
-    ("compose", SKILL_COMPOSE_JS, SCHEMA_COMPOSE_JS),
+    ("echo", SKILL_ECHO_JS, SCHEMA_ECHO_JS, DESC_ECHO),
+    ("error", SKILL_ERROR_JS, SCHEMA_ERROR_JS, DESC_ERROR),
+    ("compose", SKILL_COMPOSE_JS, SCHEMA_COMPOSE_JS, DESC_COMPOSE),
     (
         "verify-references",
         SKILL_VERIFY_REFERENCES_JS,
         SCHEMA_VERIFY_REFERENCES_JS,
+        DESC_VERIFY_REFERENCES,
+    ),
+    (
+        "read-file",
+        SKILL_READ_FILE_JS,
+        SCHEMA_READ_FILE_JS,
+        DESC_READ_FILE,
+    ),
+    (
+        "grep-file",
+        SKILL_GREP_FILE_JS,
+        SCHEMA_GREP_FILE_JS,
+        DESC_GREP_FILE,
+    ),
+    (
+        "loop-llm",
+        SKILL_LOOP_LLM_JS,
+        SCHEMA_LOOP_LLM_JS,
+        DESC_LOOP_LLM,
     ),
 ];
 
 fn lookup_builtin_skill(name: &str) -> Option<(&'static str, &'static str)> {
     BUILTIN_SKILLS
         .iter()
-        .find(|(n, _, _)| *n == name)
-        .map(|(_, src, schema)| (*src, *schema))
+        .find(|(n, _, _, _)| *n == name)
+        .map(|(_, src, schema, _)| (*src, *schema))
+}
+
+fn lookup_builtin_description(name: &str) -> Option<&'static str> {
+    BUILTIN_SKILLS
+        .iter()
+        .find(|(n, _, _, _)| *n == name)
+        .map(|(_, _, _, desc)| *desc)
 }
 
 fn trace_enabled() -> bool {
@@ -178,11 +228,64 @@ impl SkillLoaderHost for SkillState {
     fn get_source(&mut self) -> wasmtime::Result<String> {
         Ok(self.skill_source.clone())
     }
+
+    fn get_description(&mut self, skill_name: String) -> wasmtime::Result<String> {
+        match lookup_builtin_description(&skill_name) {
+            Some(desc) => Ok(desc.to_string()),
+            None => Err(anyhow::anyhow!(
+                "unknown skill: {} (no description registered)",
+                skill_name
+            )),
+        }
+    }
 }
 
 impl SchemaLoaderHost for SkillState {
     fn get_schema_source(&mut self) -> wasmtime::Result<String> {
         Ok(self.schema_source.clone())
+    }
+
+    fn get_input_schema_json(&mut self, skill_name: String) -> wasmtime::Result<String> {
+        let (source, schema_source) = match lookup_builtin_skill(&skill_name) {
+            Some(s) => s,
+            None => {
+                return Err(anyhow::anyhow!(
+                    "unknown skill: {} (cannot resolve input schema)",
+                    skill_name
+                ));
+            }
+        };
+        let engine = self.engine.clone();
+        let component = self.component.clone();
+        let llm_config = self.llm_config.clone();
+        let linker = build_linker(&engine)
+            .map_err(|e| anyhow::anyhow!("failed to build linker for schema lookup: {e}"))?;
+        let next_depth = self.depth + 1;
+        let (mut store, runtime) = instantiate(
+            &engine,
+            &component,
+            &linker,
+            source.to_string(),
+            schema_source.to_string(),
+            Profile::Builtin,
+            llm_config,
+            next_depth,
+        )
+        .map_err(|e| anyhow::anyhow!("failed to instantiate skill for schema lookup: {e}"))?;
+        let envelope_json = match runtime.call_get_schema(&mut store)? {
+            Ok(json) => json,
+            Err(err) => {
+                return Err(anyhow::anyhow!(
+                    "get_schema failed for {}: {}",
+                    skill_name,
+                    err.message
+                ));
+            }
+        };
+        let (input_schema, _output) = parse_schema_envelope(&envelope_json)?;
+        let json = serde_json::to_string(&input_schema)
+            .map_err(|e| anyhow::anyhow!("failed to serialize input schema: {e}"))?;
+        Ok(json)
     }
 }
 
@@ -545,7 +648,9 @@ fn run_skill_run(engine: &Engine, raw_argv: Vec<String>) -> Result<()> {
     };
 
     let (source, schema_source, profile) = match skill_source {
-        SkillSource::Builtin(src, schema) => (src.to_string(), schema.to_string(), Profile::Builtin),
+        SkillSource::Builtin(src, schema) => {
+            (src.to_string(), schema.to_string(), Profile::Builtin)
+        }
         SkillSource::Path(skill_path) => {
             let src = fs::read_to_string(&skill_path).with_context(|| {
                 format!("failed to read skill source: {}", skill_path.display())

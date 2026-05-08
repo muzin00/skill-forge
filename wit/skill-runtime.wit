@@ -21,10 +21,12 @@ interface types {
 
 interface skill-loader-host {
   get-source: func() -> string;
+  get-description: func(skill-name: string) -> string;
 }
 
 interface schema-loader-host {
   get-schema-source: func() -> string;
+  get-input-schema-json: func(skill-name: string) -> string;
 }
 
 interface llm-host {

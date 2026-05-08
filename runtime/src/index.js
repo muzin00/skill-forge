@@ -1,5 +1,11 @@
-import { getSource } from 'skill-forge:runtime/skill-loader-host';
-import { getSchemaSource } from 'skill-forge:runtime/schema-loader-host';
+import {
+  getSource,
+  getDescription as hostGetDescription,
+} from 'skill-forge:runtime/skill-loader-host';
+import {
+  getSchemaSource,
+  getInputSchemaJson as hostGetInputSchemaJson,
+} from 'skill-forge:runtime/schema-loader-host';
 import { callLlm as hostCallLlm } from 'skill-forge:runtime/llm-host';
 import { execCmd as hostExecCmd } from 'skill-forge:runtime/exec-host';
 import { messages as hostAnthropicMessages } from 'skill-forge:runtime/anthropic-host';
@@ -15,6 +21,15 @@ globalThis.execCmd = async function execCmd(cmd, args) {
 
 globalThis.anthropicMessages = function anthropicMessages(bodyJson) {
   return hostAnthropicMessages(bodyJson);
+};
+
+globalThis.getSkillDescription = function getSkillDescription(skillName) {
+  return hostGetDescription(skillName);
+};
+
+globalThis.getSkillInputSchema = function getSkillInputSchema(skillName) {
+  const json = hostGetInputSchemaJson(skillName);
+  return JSON.parse(json);
 };
 
 globalThis.invokeSkill = async function invokeSkill(name, input) {
