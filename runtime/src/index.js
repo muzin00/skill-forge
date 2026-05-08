@@ -13,8 +13,8 @@ globalThis.execCmd = async function execCmd(cmd, args) {
   return hostExecCmd(cmd, args);
 };
 
-globalThis.anthropicMessages = function anthropicMessages(bodyJson, apiKey) {
-  return hostAnthropicMessages(bodyJson, apiKey);
+globalThis.anthropicMessages = function anthropicMessages(bodyJson) {
+  return hostAnthropicMessages(bodyJson);
 };
 
 globalThis.invokeSkill = async function invokeSkill(name, input) {

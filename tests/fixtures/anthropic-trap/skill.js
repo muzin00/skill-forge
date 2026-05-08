@@ -1,4 +1,4 @@
 defineSkill(async (input) => {
-  const out = anthropicMessages('{}', 'dummy');
+  const out = anthropicMessages('{}');
   return { out };
 });

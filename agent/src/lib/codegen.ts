@@ -92,13 +92,8 @@ const TOOLS: ToolDefinition[] = [
 export async function generateSkillCode(
   prompt: string,
   model: string,
-  apiKey: string,
 ): Promise<Generated> {
-  if (!apiKey) {
-    throw 'spec-violation: api-key argument is empty';
-  }
-
-  const client = new Anthropic({ apiKey });
+  const client = new Anthropic();
   const messages: Array<{
     role: 'user' | 'assistant';
     content: string | RequestContentBlock[];

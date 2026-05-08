@@ -41,10 +41,6 @@ export interface MessagesCreateResponse {
   usage: { input_tokens: number; output_tokens: number };
 }
 
-export interface AnthropicOptions {
-  apiKey: string;
-}
-
 export class AnthropicAPIError extends Error {
   status: number;
   body: string;
@@ -58,19 +54,15 @@ export class AnthropicAPIError extends Error {
 }
 
 declare const globalThis: {
-  anthropicMessages: (bodyJson: string, apiKey: string) => string;
+  anthropicMessages: (bodyJson: string) => string;
 };
 
 export class Anthropic {
-  private apiKey: string;
-
   messages: {
     create(params: MessagesCreateParams): Promise<MessagesCreateResponse>;
   };
 
-  constructor(opts: AnthropicOptions) {
-    this.apiKey = opts.apiKey;
-
+  constructor() {
     this.messages = {
       create: (params) => this.createMessage(params),
     };
@@ -81,7 +73,7 @@ export class Anthropic {
   ): Promise<MessagesCreateResponse> {
     let raw: string;
     try {
-      raw = globalThis.anthropicMessages(JSON.stringify(params), this.apiKey);
+      raw = globalThis.anthropicMessages(JSON.stringify(params));
     } catch (e) {
       let msg = e instanceof Error ? e.message : String(e);
       msg = msg.replace(/^(?:Error:\s*)+/, '');

@@ -10,9 +10,8 @@ export async function callLlm(
   prompt: string,
   inputJson: string,
   model: string,
-  apiKey: string,
 ): Promise<string> {
-  const client = new Anthropic({ apiKey });
+  const client = new Anthropic();
   let response;
   try {
     response = await client.messages.create({

@@ -36,7 +36,7 @@ interface exec-host {
 }
 
 interface anthropic-host {
-  messages: func(body-json: string, api-key: string) -> result<string, string>;
+  messages: func(body-json: string) -> result<string, string>;
 }
 
 interface invoke-host {

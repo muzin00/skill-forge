@@ -263,20 +263,22 @@ impl AnthropicHost for SkillState {
     fn messages(
         &mut self,
         body_json: String,
-        api_key: String,
     ) -> wasmtime::Result<std::result::Result<String, String>> {
         if self.profile != Profile::Builtin {
             return Err(anyhow::anyhow!(
                 "capability-denied: anthropic-host is not available to user skills"
             ));
         }
-        let timeout = self
-            .llm_config
-            .as_ref()
-            .map(|c| c.timeout)
-            .unwrap_or_else(|| Duration::from_secs(DEFAULT_TIMEOUT_SECS));
+        let cfg = match self.llm_config.as_ref() {
+            Some(c) => c,
+            None => {
+                return Ok(Err(
+                    "capability-denied: anthropic-host is not configured".to_string()
+                ));
+            }
+        };
         let started = Instant::now();
-        let r = anthropic_messages_blocking(&body_json, &api_key, timeout);
+        let r = anthropic_messages_blocking(&body_json, &cfg.api_key, cfg.timeout);
         log_trace("anthropic-host roundtrip", started);
         Ok(r)
     }
@@ -967,7 +969,6 @@ fn generate_via_api(
     let args_json = serde_json::json!({
         "prompt": prompt,
         "model": model,
-        "apiKey": api_key,
     })
     .to_string();
     let r = run_builtin_skill(
