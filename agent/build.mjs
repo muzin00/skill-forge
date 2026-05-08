@@ -8,6 +8,7 @@ const SKILLS = [
   'echo',
   'error',
   'compose',
+  'verify-references',
 ];
 
 const rawMarkdownPlugin = {
