@@ -1,0 +1,1 @@
+Verify that source code references (file paths, symbols, line ranges) mentioned in a text actually exist in the repository, and emit supplementary findings discovered by reading actual code. Use when checking the consistency of an Issue or design document against the codebase.

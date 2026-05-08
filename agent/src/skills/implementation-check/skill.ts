@@ -1,0 +1,84 @@
+import { loopLlm } from '../../lib/loopLlm.js';
+
+declare const execCmd: (cmd: string, args: string[]) => Promise<string>;
+
+interface ImplementationCheckInput {
+  issueNumber: string;
+}
+
+interface ImplementationCheckResult {
+  evaluation: string;
+  implementable: boolean;
+}
+
+const PROMPT = `# Issue・仕様が実装可能な状態か判定する
+
+与えられた Issue や仕様の内容を分析し、実装に必要な以下の観点で過不足を評価する。
+
+## 評価観点
+
+- 目的・ゴールが明確か
+- 具体的な振る舞い・仕様が定義されているか
+- 技術的なアプローチ・設計方針があるか
+- 影響範囲・既存コードとの関連が把握できるか
+- 完了条件が明確か
+
+## ソースコードの探索・検証
+
+Issue 本文だけでなく、実際のリポジトリのソースコードを探索し、記載内容と実態の整合性を検証する。
+
+- Issue で言及されているファイル・関数・モジュール・API が実在するかを確認する
+- 既存実装と仕様に矛盾がないか確認する
+- 想定されている設計・アプローチが現状のアーキテクチャで実現可能か確認する
+- 必要な依存ライブラリ・フレームワーク機能が揃っているか確認する
+- 類似機能や再利用可能な既存実装がないか確認する
+
+検証結果は評価観点の判定根拠として用い、Issue 本文だけでは見えない不足点・矛盾点も併せて指摘する。
+
+## 評価結果の提示
+
+### 実装可能な場合
+
+- 各観点が充足している旨を提示する
+- 実装を開始してよい状態であることを明示する
+
+### 実装に不足がある場合
+
+- 各観点の充足状況を表形式などで提示する
+- 不足している情報や曖昧な点を具体的に指摘する
+- 補うべき情報を提示する
+
+## 重要: 終了条件
+
+- read-file / grep-file の呼び出しは **5〜10 回程度** で十分な根拠が得られる。それ以上は限界収益逓減。
+- 5 つの評価観点について暫定的な判断ができたら **速やかに output tool を呼んで終了** すること。
+- 完璧な網羅性より、**確度の高い判定** を優先する。
+- 必ず output tool を **ちょうど 1 回** 呼び出して結果を返すこと。output tool を呼ばずに探索を続けると loop-exceeded で失敗する。`;
+
+const OUTPUT_SCHEMA = {
+  type: 'object',
+  properties: {
+    evaluation: {
+      type: 'string',
+      description: '評価結果のテキスト',
+    },
+    implementable: {
+      type: 'boolean',
+      description: '実装可能かどうか',
+    },
+  },
+  required: ['evaluation', 'implementable'],
+};
+
+defineSkill(
+  async (input: ImplementationCheckInput): Promise<ImplementationCheckResult> => {
+    const content = await execCmd('gh', ['issue', 'view', input.issueNumber]);
+
+    return loopLlm<ImplementationCheckResult>(PROMPT, {
+      context: content,
+      allowSkills: ['read-file', 'grep-file'],
+      outputSchema: OUTPUT_SCHEMA,
+      maxIterations: 30,
+    });
+  },
+);

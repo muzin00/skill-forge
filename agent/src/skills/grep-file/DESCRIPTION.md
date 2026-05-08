@@ -1,0 +1,1 @@
+Search for text across the repository using `git grep -F` (literal substring match). Returns matching `path:line: text` lines. Use when you need to find where a function, type, constant, or any text is referenced in the codebase.

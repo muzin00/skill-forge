@@ -9,6 +9,10 @@ const SKILLS = [
   'error',
   'compose',
   'verify-references',
+  'read-file',
+  'grep-file',
+  'loop-llm',
+  'implementation-check',
 ];
 
 const rawMarkdownPlugin = {

@@ -1,0 +1,1 @@
+Read a file from the repository, optionally a specific line range. Use when you need to inspect actual code beyond what was already provided — e.g., to see surrounding context, type definitions, or related code paths.
