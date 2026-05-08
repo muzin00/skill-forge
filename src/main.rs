@@ -39,6 +39,8 @@ const SKILL_GENERATE_SKILL_CODE_JS: &str =
 const SKILL_ECHO_JS: &str = include_str!("../agent/dist/skills/echo/skill.js");
 const SKILL_ERROR_JS: &str = include_str!("../agent/dist/skills/error/skill.js");
 const SKILL_COMPOSE_JS: &str = include_str!("../agent/dist/skills/compose/skill.js");
+const SKILL_VERIFY_REFERENCES_JS: &str =
+    include_str!("../agent/dist/skills/verify-references/skill.js");
 
 const SCHEMA_CALL_LLM_JS: &str = include_str!("../agent/dist/skills/call-llm/schema.js");
 const SCHEMA_GENERATE_SKILL_CODE_JS: &str =
@@ -46,6 +48,8 @@ const SCHEMA_GENERATE_SKILL_CODE_JS: &str =
 const SCHEMA_ECHO_JS: &str = include_str!("../agent/dist/skills/echo/schema.js");
 const SCHEMA_ERROR_JS: &str = include_str!("../agent/dist/skills/error/schema.js");
 const SCHEMA_COMPOSE_JS: &str = include_str!("../agent/dist/skills/compose/schema.js");
+const SCHEMA_VERIFY_REFERENCES_JS: &str =
+    include_str!("../agent/dist/skills/verify-references/schema.js");
 
 const MAX_INVOKE_DEPTH: usize = 8;
 
@@ -59,6 +63,11 @@ const BUILTIN_SKILLS: &[(&str, &str, &str)] = &[
     ("echo", SKILL_ECHO_JS, SCHEMA_ECHO_JS),
     ("error", SKILL_ERROR_JS, SCHEMA_ERROR_JS),
     ("compose", SKILL_COMPOSE_JS, SCHEMA_COMPOSE_JS),
+    (
+        "verify-references",
+        SKILL_VERIFY_REFERENCES_JS,
+        SCHEMA_VERIFY_REFERENCES_JS,
+    ),
 ];
 
 fn lookup_builtin_skill(name: &str) -> Option<(&'static str, &'static str)> {
@@ -522,7 +531,7 @@ fn instantiate(
 
 fn run_skill_run(engine: &Engine, raw_argv: Vec<String>) -> Result<()> {
     let RunArgs {
-        skill_path,
+        skill_source,
         model,
         backend,
         timeout,
@@ -535,11 +544,19 @@ fn run_skill_run(engine: &Engine, raw_argv: Vec<String>) -> Result<()> {
         Backend::Claude => env::var("ANTHROPIC_API_KEY").unwrap_or_default(),
     };
 
-    let source = fs::read_to_string(&skill_path)
-        .with_context(|| format!("failed to read skill source: {}", skill_path.display()))?;
-    let schema_path = schema_path_for(&skill_path);
-    let schema_source = fs::read_to_string(&schema_path)
-        .with_context(|| format!("failed to read schema source: {}", schema_path.display()))?;
+    let (source, schema_source, profile) = match skill_source {
+        SkillSource::Builtin(src, schema) => (src.to_string(), schema.to_string(), Profile::Builtin),
+        SkillSource::Path(skill_path) => {
+            let src = fs::read_to_string(&skill_path).with_context(|| {
+                format!("failed to read skill source: {}", skill_path.display())
+            })?;
+            let schema_path = schema_path_for(&skill_path);
+            let schema = fs::read_to_string(&schema_path).with_context(|| {
+                format!("failed to read schema source: {}", schema_path.display())
+            })?;
+            (src, schema, Profile::User)
+        }
+    };
 
     let component = deserialize_runtime_component(engine)?;
     let linker = build_linker(engine)?;
@@ -549,7 +566,7 @@ fn run_skill_run(engine: &Engine, raw_argv: Vec<String>) -> Result<()> {
         &linker,
         source,
         schema_source,
-        Profile::User,
+        profile,
         Some(LlmConfig {
             model,
             api_key,
@@ -657,8 +674,13 @@ fn build_input_args_json(
     }
 }
 
+enum SkillSource {
+    Builtin(&'static str, &'static str),
+    Path(PathBuf),
+}
+
 struct RunArgs {
-    skill_path: PathBuf,
+    skill_source: SkillSource,
     model: String,
     backend: Backend,
     timeout: Duration,
@@ -750,22 +772,26 @@ fn parse_run_argv(argv: Vec<String>) -> RunArgs {
         }
     }
 
-    let skill_path = match (skill, name) {
+    let skill_source = match (skill, name) {
         (Some(_), Some(_)) => {
             eprintln!("Error: <skill-name> and --skill are mutually exclusive");
             std::process::exit(2);
         }
-        (Some(path), None) => path,
+        (Some(path), None) => SkillSource::Path(path),
         (None, Some(n)) => {
             if let Err(msg) = validate_skill_name(&n) {
                 eprintln!("Error: <skill-name>: {msg}");
                 std::process::exit(2);
             }
-            match skill_dir_for_name(&n) {
-                Ok(dir) => dir.join("skill.js"),
-                Err(e) => {
-                    eprintln!("Error: <skill-name>: {e}");
-                    std::process::exit(2);
+            if let Some((src, schema)) = lookup_builtin_skill(&n) {
+                SkillSource::Builtin(src, schema)
+            } else {
+                match skill_dir_for_name(&n) {
+                    Ok(dir) => SkillSource::Path(dir.join("skill.js")),
+                    Err(e) => {
+                        eprintln!("Error: <skill-name>: {e}");
+                        std::process::exit(2);
+                    }
                 }
             }
         }
@@ -781,7 +807,7 @@ fn parse_run_argv(argv: Vec<String>) -> RunArgs {
     });
 
     RunArgs {
-        skill_path,
+        skill_source,
         model,
         backend: resolve_backend(backend_flag),
         timeout: resolve_timeout(timeout_flag),
