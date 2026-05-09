@@ -1,0 +1,1 @@
+Fetch a GitHub Issue via `gh issue view`. Accepts an Issue number or URL, returns the raw stdout (title, state, labels, body and other metadata). Use when you need to read an Issue's content from inside a skill loop.
