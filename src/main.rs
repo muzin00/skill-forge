@@ -24,6 +24,7 @@ bindgen!({
 
 use skill_forge::runtime::anthropic_host::Host as AnthropicHost;
 use skill_forge::runtime::exec_host::Host as ExecHost;
+use skill_forge::runtime::instruction_loader_host::Host as InstructionLoaderHost;
 use skill_forge::runtime::invoke_host::Host as InvokeHost;
 use skill_forge::runtime::llm_host::Host as LlmHost;
 use skill_forge::runtime::log_host::Host as LogHost;
@@ -83,80 +84,98 @@ const DESC_IMPLEMENTATION_CHECK: &str =
 const DESC_VIEW_ISSUE: &str = include_str!("../agent/src/skills/view-issue/DESCRIPTION.md");
 const DESC_ECHO_TASK: &str = include_str!("../agent/src/skills/echo-task/DESCRIPTION.md");
 
+const INSTRUCTION_IMPLEMENTATION_CHECK: &str =
+    include_str!("../agent/src/skills/implementation-check/INSTRUCTION.md");
+
 const MAX_INVOKE_DEPTH: usize = 8;
 
-const BUILTIN_SKILLS: &[(&str, &str, &str, &str)] = &[
+const BUILTIN_SKILLS: &[(&str, &str, &str, &str, &str)] = &[
     (
         "call-llm",
         SKILL_CALL_LLM_JS,
         SCHEMA_CALL_LLM_JS,
         DESC_CALL_LLM,
+        "",
     ),
     (
         "generate-skill-code",
         SKILL_GENERATE_SKILL_CODE_JS,
         SCHEMA_GENERATE_SKILL_CODE_JS,
         DESC_GENERATE_SKILL_CODE,
+        "",
     ),
-    ("echo", SKILL_ECHO_JS, SCHEMA_ECHO_JS, DESC_ECHO),
-    ("error", SKILL_ERROR_JS, SCHEMA_ERROR_JS, DESC_ERROR),
-    ("compose", SKILL_COMPOSE_JS, SCHEMA_COMPOSE_JS, DESC_COMPOSE),
+    ("echo", SKILL_ECHO_JS, SCHEMA_ECHO_JS, DESC_ECHO, ""),
+    ("error", SKILL_ERROR_JS, SCHEMA_ERROR_JS, DESC_ERROR, ""),
+    (
+        "compose",
+        SKILL_COMPOSE_JS,
+        SCHEMA_COMPOSE_JS,
+        DESC_COMPOSE,
+        "",
+    ),
     (
         "verify-references",
         SKILL_VERIFY_REFERENCES_JS,
         SCHEMA_VERIFY_REFERENCES_JS,
         DESC_VERIFY_REFERENCES,
+        "",
     ),
     (
         "read-file",
         SKILL_READ_FILE_JS,
         SCHEMA_READ_FILE_JS,
         DESC_READ_FILE,
+        "",
     ),
     (
         "grep-file",
         SKILL_GREP_FILE_JS,
         SCHEMA_GREP_FILE_JS,
         DESC_GREP_FILE,
+        "",
     ),
     (
         "loop-llm",
         SKILL_LOOP_LLM_JS,
         SCHEMA_LOOP_LLM_JS,
         DESC_LOOP_LLM,
+        "",
     ),
     (
         "implementation-check",
         SKILL_IMPLEMENTATION_CHECK_JS,
         SCHEMA_IMPLEMENTATION_CHECK_JS,
         DESC_IMPLEMENTATION_CHECK,
+        INSTRUCTION_IMPLEMENTATION_CHECK,
     ),
     (
         "view-issue",
         SKILL_VIEW_ISSUE_JS,
         SCHEMA_VIEW_ISSUE_JS,
         DESC_VIEW_ISSUE,
+        "",
     ),
     (
         "echo-task",
         SKILL_ECHO_TASK_JS,
         SCHEMA_ECHO_TASK_JS,
         DESC_ECHO_TASK,
+        "",
     ),
 ];
 
-fn lookup_builtin_skill(name: &str) -> Option<(&'static str, &'static str)> {
+fn lookup_builtin_skill(name: &str) -> Option<(&'static str, &'static str, &'static str)> {
     BUILTIN_SKILLS
         .iter()
-        .find(|(n, _, _, _)| *n == name)
-        .map(|(_, src, schema, _)| (*src, *schema))
+        .find(|(n, _, _, _, _)| *n == name)
+        .map(|(_, src, schema, _, instruction)| (*src, *schema, *instruction))
 }
 
 fn lookup_builtin_description(name: &str) -> Option<&'static str> {
     BUILTIN_SKILLS
         .iter()
-        .find(|(n, _, _, _)| *n == name)
-        .map(|(_, _, _, desc)| *desc)
+        .find(|(n, _, _, _, _)| *n == name)
+        .map(|(_, _, _, desc, _)| *desc)
 }
 
 fn trace_enabled() -> bool {
@@ -240,6 +259,7 @@ struct SkillState {
     table: ResourceTable,
     skill_source: String,
     schema_source: String,
+    instruction_source: String,
     profile: Profile,
     llm_config: Option<LlmConfig>,
     engine: Engine,
@@ -278,7 +298,7 @@ impl SchemaLoaderHost for SkillState {
     }
 
     fn get_input_schema_json(&mut self, skill_name: String) -> wasmtime::Result<String> {
-        let (source, schema_source) = match lookup_builtin_skill(&skill_name) {
+        let (source, schema_source, instruction_source) = match lookup_builtin_skill(&skill_name) {
             Some(s) => s,
             None => {
                 return Err(anyhow::anyhow!(
@@ -299,6 +319,7 @@ impl SchemaLoaderHost for SkillState {
             &linker,
             source.to_string(),
             schema_source.to_string(),
+            instruction_source.to_string(),
             Profile::Builtin,
             llm_config,
             next_depth,
@@ -318,6 +339,12 @@ impl SchemaLoaderHost for SkillState {
         let json = serde_json::to_string(&envelope.input)
             .map_err(|e| anyhow::anyhow!("failed to serialize input schema: {e}"))?;
         Ok(json)
+    }
+}
+
+impl InstructionLoaderHost for SkillState {
+    fn get_instruction(&mut self) -> wasmtime::Result<String> {
+        Ok(self.instruction_source.clone())
     }
 }
 
@@ -370,7 +397,7 @@ impl InvokeHost for SkillState {
                 stack: None,
             }));
         }
-        let (source, schema_source) = match lookup_builtin_skill(&skill_name) {
+        let (source, schema_source, instruction_source) = match lookup_builtin_skill(&skill_name) {
             Some(s) => s,
             None => {
                 return Ok(Err(SkillError {
@@ -391,6 +418,7 @@ impl InvokeHost for SkillState {
             &linker,
             source.to_string(),
             schema_source.to_string(),
+            instruction_source.to_string(),
             Profile::Builtin,
             llm_config,
             next_depth,
@@ -649,6 +677,7 @@ fn instantiate(
     linker: &Linker<SkillState>,
     skill_source: String,
     schema_source: String,
+    instruction_source: String,
     profile: Profile,
     llm_config: Option<LlmConfig>,
     depth: usize,
@@ -658,6 +687,7 @@ fn instantiate(
         table: ResourceTable::new(),
         skill_source,
         schema_source,
+        instruction_source,
         profile,
         llm_config,
         engine: engine.clone(),
@@ -686,10 +716,13 @@ fn run_skill_run(engine: &Engine, raw_argv: Vec<String>) -> Result<()> {
         Backend::Claude => env::var("ANTHROPIC_API_KEY").unwrap_or_default(),
     };
 
-    let (source, schema_source, profile) = match skill_source {
-        SkillSource::Builtin(src, schema) => {
-            (src.to_string(), schema.to_string(), Profile::Builtin)
-        }
+    let (source, schema_source, instruction_source, profile) = match skill_source {
+        SkillSource::Builtin(src, schema, instruction) => (
+            src.to_string(),
+            schema.to_string(),
+            instruction.to_string(),
+            Profile::Builtin,
+        ),
         SkillSource::Path(skill_path) => {
             let src = fs::read_to_string(&skill_path).with_context(|| {
                 format!("failed to read skill source: {}", skill_path.display())
@@ -698,7 +731,18 @@ fn run_skill_run(engine: &Engine, raw_argv: Vec<String>) -> Result<()> {
             let schema = fs::read_to_string(&schema_path).with_context(|| {
                 format!("failed to read schema source: {}", schema_path.display())
             })?;
-            (src, schema, Profile::User)
+            let instruction_path = instruction_path_for(&skill_path);
+            let instruction = match fs::read_to_string(&instruction_path) {
+                Ok(s) => s,
+                Err(e) if e.kind() == io::ErrorKind::NotFound => String::new(),
+                Err(e) => {
+                    return Err(anyhow::anyhow!(
+                        "failed to read instruction source: {}: {e}",
+                        instruction_path.display()
+                    ));
+                }
+            };
+            (src, schema, instruction, Profile::User)
         }
     };
 
@@ -710,6 +754,7 @@ fn run_skill_run(engine: &Engine, raw_argv: Vec<String>) -> Result<()> {
         &linker,
         source,
         schema_source,
+        instruction_source,
         profile,
         Some(LlmConfig {
             model,
@@ -853,7 +898,7 @@ fn build_input_args_json(
 }
 
 enum SkillSource {
-    Builtin(&'static str, &'static str),
+    Builtin(&'static str, &'static str, &'static str),
     Path(PathBuf),
 }
 
@@ -961,8 +1006,8 @@ fn parse_run_argv(argv: Vec<String>) -> RunArgs {
                 eprintln!("Error: <skill-name>: {msg}");
                 std::process::exit(2);
             }
-            if let Some((src, schema)) = lookup_builtin_skill(&n) {
-                SkillSource::Builtin(src, schema)
+            if let Some((src, schema, instruction)) = lookup_builtin_skill(&n) {
+                SkillSource::Builtin(src, schema, instruction)
             } else {
                 match skill_dir_for_name(&n) {
                     Ok(dir) => SkillSource::Path(dir.join("skill.js")),
@@ -1001,10 +1046,19 @@ fn schema_path_for(skill_path: &PathBuf) -> PathBuf {
         .join("schema.js")
 }
 
+fn instruction_path_for(skill_path: &PathBuf) -> PathBuf {
+    skill_path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(PathBuf::new)
+        .join("INSTRUCTION.md")
+}
+
 pub(crate) fn evaluate_schema_for_mcp(
     engine: &Engine,
     skill_source: &str,
     schema_source: &str,
+    instruction_source: &str,
 ) -> Result<serde_json::Value> {
     let component = deserialize_runtime_component(engine)?;
     let linker = build_linker(engine)?;
@@ -1014,6 +1068,7 @@ pub(crate) fn evaluate_schema_for_mcp(
         &linker,
         skill_source.to_string(),
         schema_source.to_string(),
+        instruction_source.to_string(),
         Profile::User,
         None,
         0,
@@ -1032,6 +1087,7 @@ pub(crate) fn run_skill_for_mcp(
     engine: &Engine,
     skill_source: &str,
     schema_source: &str,
+    instruction_source: &str,
     args_json: &str,
 ) -> std::result::Result<String, String> {
     let component = deserialize_runtime_component(engine)
@@ -1044,6 +1100,7 @@ pub(crate) fn run_skill_for_mcp(
         &linker,
         skill_source.to_string(),
         schema_source.to_string(),
+        instruction_source.to_string(),
         Profile::User,
         llm_config,
         0,
@@ -1078,6 +1135,7 @@ fn run_builtin_skill(
     engine: &Engine,
     skill_source: &str,
     schema_source: &str,
+    instruction_source: &str,
     args_json: &str,
     llm_config: Option<LlmConfig>,
 ) -> Result<std::result::Result<String, SkillError>> {
@@ -1089,6 +1147,7 @@ fn run_builtin_skill(
         &linker,
         skill_source.to_string(),
         schema_source.to_string(),
+        instruction_source.to_string(),
         Profile::Builtin,
         llm_config,
         0,
@@ -1139,7 +1198,7 @@ fn run_generate(
     println!("generating skill code...");
     let model_normalized = normalize_model(model);
 
-    let (code, capabilities, schema) = match backend {
+    let (code, capabilities, schema, instruction) = match backend {
         Backend::Api => generate_via_api(engine, prompt, &model_normalized, &api_key, timeout)?,
         Backend::Claude => generate_via_claude(prompt, &model_normalized, &api_key, timeout)?,
     };
@@ -1157,8 +1216,8 @@ fn run_generate(
         })?;
     }
 
-    write_generated_skill(&skill_dir, prompt, &code, &capabilities, &schema)?;
-    print_generate_summary(&skill_dir, &capabilities, name, model);
+    write_generated_skill(&skill_dir, prompt, &code, &capabilities, &schema, &instruction)?;
+    print_generate_summary(&skill_dir, &capabilities, &instruction, name, model);
 
     Ok(())
 }
@@ -1169,7 +1228,7 @@ fn generate_via_api(
     model: &str,
     api_key: &str,
     timeout: Duration,
-) -> Result<(String, Vec<String>, serde_json::Value)> {
+) -> Result<(String, Vec<String>, serde_json::Value, String)> {
     let args_json = serde_json::json!({
         "prompt": prompt,
         "model": model,
@@ -1179,6 +1238,7 @@ fn generate_via_api(
         engine,
         SKILL_GENERATE_SKILL_CODE_JS,
         SCHEMA_GENERATE_SKILL_CODE_JS,
+        "",
         &args_json,
         Some(LlmConfig {
             model: model.to_string(),
@@ -1202,7 +1262,7 @@ fn generate_via_claude(
     model: &str,
     api_key: &str,
     timeout: Duration,
-) -> Result<(String, Vec<String>, serde_json::Value)> {
+) -> Result<(String, Vec<String>, serde_json::Value, String)> {
     let cfg = mcp_config_for_self(api_key)?;
     let cfg_path = write_tmp_mcp_config(&cfg)?;
 
@@ -1306,7 +1366,7 @@ fn extract_submit_from_stream(stdout: &str, _exe: &str) -> Option<serde_json::Va
 
 fn parse_submit_input(
     input: &serde_json::Value,
-) -> Result<(String, Vec<String>, serde_json::Value)> {
+) -> Result<(String, Vec<String>, serde_json::Value, String)> {
     let code = input
         .get("code")
         .and_then(|c| c.as_str())
@@ -1325,7 +1385,12 @@ fn parse_submit_input(
         .get("schema")
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("submit_generated_code: missing 'schema' object"))?;
-    Ok((code, capabilities, schema))
+    let instruction = input
+        .get("instruction")
+        .and_then(|c| c.as_str())
+        .ok_or_else(|| anyhow::anyhow!("submit_generated_code: missing 'instruction' string"))?
+        .to_string();
+    Ok((code, capabilities, schema, instruction))
 }
 
 fn run_with_timeout(
@@ -1393,7 +1458,7 @@ fn skill_dir_for_name(name: &str) -> Result<PathBuf> {
     Ok(home.join(".skill-forge").join("skills").join(name))
 }
 
-fn parse_generated(json: &str) -> Result<(String, Vec<String>, serde_json::Value)> {
+fn parse_generated(json: &str) -> Result<(String, Vec<String>, serde_json::Value, String)> {
     let v: serde_json::Value = serde_json::from_str(json)
         .with_context(|| format!("failed to parse builtin skill output as JSON: {json}"))?;
     let code = v
@@ -1417,7 +1482,12 @@ fn parse_generated(json: &str) -> Result<(String, Vec<String>, serde_json::Value
     if !schema.is_object() {
         anyhow::bail!("generated output 'schema' is not a JSON object");
     }
-    Ok((code, capabilities, schema))
+    let instruction = v
+        .get("instruction")
+        .and_then(|c| c.as_str())
+        .ok_or_else(|| anyhow::anyhow!("generated output missing 'instruction' string field"))?
+        .to_string();
+    Ok((code, capabilities, schema, instruction))
 }
 
 fn write_generated_skill(
@@ -1426,6 +1496,7 @@ fn write_generated_skill(
     code: &str,
     capabilities: &[String],
     schema: &serde_json::Value,
+    instruction: &str,
 ) -> Result<()> {
     fs::create_dir_all(skill_dir)
         .with_context(|| format!("failed to create skill directory: {}", skill_dir.display()))?;
@@ -1447,13 +1518,28 @@ fn write_generated_skill(
     fs::write(&prompt_path, prompt)
         .with_context(|| format!("failed to write {}", prompt_path.display()))?;
 
+    if !instruction.is_empty() {
+        let instruction_path = skill_dir.join("INSTRUCTION.md");
+        fs::write(&instruction_path, instruction)
+            .with_context(|| format!("failed to write {}", instruction_path.display()))?;
+    }
+
     Ok(())
 }
 
-fn print_generate_summary(skill_dir: &Path, capabilities: &[String], name: &str, model: &str) {
+fn print_generate_summary(
+    skill_dir: &Path,
+    capabilities: &[String],
+    instruction: &str,
+    name: &str,
+    model: &str,
+) {
     println!("wrote {}", skill_dir.join("skill.js").display());
     println!("wrote {}", skill_dir.join("schema.js").display());
     println!("wrote {}", skill_dir.join("PROMPT.md").display());
+    if !instruction.is_empty() {
+        println!("wrote {}", skill_dir.join("INSTRUCTION.md").display());
+    }
     println!("capabilities: {}", capabilities.join(", "));
     println!("run with: skill-forge run {name} --model {model}");
 }
@@ -1547,20 +1633,36 @@ mod tests {
                 "type": "object",
                 "properties": {},
                 "additionalProperties": false
-            }
+            },
+            "instruction": ""
         })
         .to_string();
-        let (code, caps, schema) = parse_generated(&json).unwrap();
+        let (code, caps, schema, instruction) = parse_generated(&json).unwrap();
         assert_eq!(code, "defineSkill(async () => 'ok');");
         assert_eq!(caps, vec!["callLlm".to_string()]);
         assert_eq!(schema.get("type").and_then(|v| v.as_str()), Some("object"));
+        assert_eq!(instruction, "");
+    }
+
+    #[test]
+    fn parse_generated_extracts_instruction() {
+        let json = json!({
+            "code": "defineSkill(async () => 'ok');",
+            "capabilities": [],
+            "schema": { "type": "object", "properties": {}, "additionalProperties": false },
+            "instruction": "do the thing"
+        })
+        .to_string();
+        let (_, _, _, instruction) = parse_generated(&json).unwrap();
+        assert_eq!(instruction, "do the thing");
     }
 
     #[test]
     fn parse_generated_errors_when_schema_missing() {
         let json = json!({
             "code": "defineSkill(async () => 'ok');",
-            "capabilities": []
+            "capabilities": [],
+            "instruction": ""
         })
         .to_string();
         let err = parse_generated(&json).unwrap_err().to_string();
@@ -1572,11 +1674,24 @@ mod tests {
         let json = json!({
             "code": "defineSkill(async () => 'ok');",
             "capabilities": [],
-            "schema": "not-an-object"
+            "schema": "not-an-object",
+            "instruction": ""
         })
         .to_string();
         let err = parse_generated(&json).unwrap_err().to_string();
         assert!(err.contains("not a JSON object"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn parse_generated_errors_when_instruction_missing() {
+        let json = json!({
+            "code": "defineSkill(async () => 'ok');",
+            "capabilities": [],
+            "schema": { "type": "object", "properties": {}, "additionalProperties": false }
+        })
+        .to_string();
+        let err = parse_generated(&json).unwrap_err().to_string();
+        assert!(err.contains("instruction"), "unexpected error: {err}");
     }
 
     #[test]
@@ -1589,12 +1704,35 @@ mod tests {
             "required": ["userName"],
             "additionalProperties": false
         });
-        write_generated_skill(&tmp, "prompt", "code", &["callLlm".into()], &schema).unwrap();
+        write_generated_skill(&tmp, "prompt", "code", &["callLlm".into()], &schema, "").unwrap();
         let schema_js = fs::read_to_string(tmp.join("schema.js")).unwrap();
         assert!(schema_js.starts_with("defineSchema("));
         assert!(schema_js.trim_end().ends_with(");"));
         assert!(schema_js.contains("\"userName\""));
         assert!(schema_js.contains("\"additionalProperties\": false"));
+        assert!(!tmp.join("INSTRUCTION.md").exists());
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn write_generated_skill_writes_instruction_when_non_empty() {
+        let tmp = std::env::temp_dir().join(format!(
+            "skill-forge-test-instr-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = fs::remove_dir_all(&tmp);
+        let schema = json!({
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+        });
+        write_generated_skill(&tmp, "prompt", "code", &[], &schema, "do the thing").unwrap();
+        let instruction = fs::read_to_string(tmp.join("INSTRUCTION.md")).unwrap();
+        assert_eq!(instruction, "do the thing");
         let _ = fs::remove_dir_all(&tmp);
     }
 

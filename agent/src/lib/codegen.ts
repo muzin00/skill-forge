@@ -15,6 +15,7 @@ export interface Generated {
   code: string;
   capabilities: string[];
   schema: Record<string, unknown>;
+  instruction: string;
 }
 
 const ALLOWED_CAPABILITIES = ['callLlm', 'execCmd'] as const;
@@ -82,8 +83,13 @@ const TOOLS: ToolDefinition[] = [
           description:
             '生成した skill が受け取る input オブジェクトの JSON Schema。type は "object" 固定、additionalProperties は false、properties のキー集合は code が input から取り出すキーと完全一致させる。',
         },
+        instruction: {
+          type: 'string',
+          description:
+            '生成した skill が実行時に内部 LLM へ渡す指示文。skill が内部で LLM を呼ばない場合は空文字列。生成コードからは getInstruction() で参照する。',
+        },
       },
-      required: ['code', 'capabilities', 'schema'],
+      required: ['code', 'capabilities', 'schema', 'instruction'],
       additionalProperties: false,
     },
   },
@@ -238,7 +244,13 @@ function extractGenerated(
   }
   const schema = schemaRaw as Record<string, unknown>;
 
-  return { code, capabilities, schema };
+  const instructionRaw = inputObj.instruction;
+  if (typeof instructionRaw !== 'string') {
+    throw 'spec-violation: tool_use input is missing string field "instruction"';
+  }
+  const instruction = instructionRaw;
+
+  return { code, capabilities, schema, instruction };
 }
 
 function isAllowedCapability(value: string): value is AllowedCapability {

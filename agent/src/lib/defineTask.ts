@@ -3,7 +3,6 @@ import { loopLlm } from './loopLlm.js';
 const DEFAULT_MAX_ITERATIONS = 15;
 
 export interface DefineTaskOpts {
-  prompt: string;
   allowSkills: string[];
   maxIterations?: number;
 }
@@ -18,7 +17,13 @@ export function defineTask<TInput = unknown, TOutput = unknown>(
         'defineTask requires defineSchema to be called with both inputSchema and outputSchema',
       );
     }
-    return loopLlm<TOutput>(opts.prompt, {
+    const prompt = getInstruction();
+    if (!prompt) {
+      throw new Error(
+        'defineTask requires INSTRUCTION.md alongside skill.js (getInstruction() returned empty string)',
+      );
+    }
+    return loopLlm<TOutput>(prompt, {
       context: JSON.stringify(input),
       allowSkills: opts.allowSkills,
       outputSchema: schema.output,

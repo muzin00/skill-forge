@@ -50,6 +50,10 @@ interface log-host {
   log: func(message: string);
 }
 
+interface instruction-loader-host {
+  get-instruction: func() -> string;
+}
+
 world skill-runtime {
   use types.{skill-error};
 
@@ -60,6 +64,7 @@ world skill-runtime {
   import anthropic-host;
   import invoke-host;
   import log-host;
+  import instruction-loader-host;
 
   export run: func(args-json: string) -> result<string, skill-error>;
   export get-schema: func() -> result<string, skill-error>;

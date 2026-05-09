@@ -46,3 +46,4 @@ You MUST end the session by calling the `submit_generated_code` tool exactly onc
 - `code`: the full JavaScript source. Must call `defineSkill(async (input) => { ... })` at the top level.
 - `capabilities`: the list of host primitives the code actually invokes. Include `"callLlm"` if the code calls `callLlm`, and `"execCmd"` if the code calls `execCmd`. If the code uses no host primitives, return an empty list.
 - `schema`: the JSON Schema object describing the `input` shape, following the constraints above.
+- `instruction`: the long-form natural-language instruction the generated code passes to its internal LLM. Required field. If the generated code calls `callLlm`, place the LLM instruction text here (the code should reference it via `getInstruction()` instead of inlining a long string literal). If the code does not call `callLlm`, set this to an empty string `""`.

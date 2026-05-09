@@ -18,6 +18,7 @@ struct SkillEntry {
     input_schema: Value,
     skill_source: String,
     schema_source: String,
+    instruction_source: String,
 }
 
 impl SkillsHandler {
@@ -59,6 +60,7 @@ impl ToolHandler for SkillsHandler {
             &self.engine,
             &skill.skill_source,
             &skill.schema_source,
+            &skill.instruction_source,
             &args_json,
         ) {
             Ok(stdout) => Ok(text_result(&stdout, false)),
@@ -109,6 +111,7 @@ fn load_skill_entry(engine: &Engine, dir: &Path, name: &str) -> Result<SkillEntr
     let skill_path = dir.join("skill.js");
     let schema_path = dir.join("schema.js");
     let description_path = dir.join("DESCRIPTION.md");
+    let instruction_path = dir.join("INSTRUCTION.md");
 
     let skill_source = fs::read_to_string(&skill_path)
         .map_err(|e| format!("missing or unreadable skill.js: {e}"))?;
@@ -116,9 +119,15 @@ fn load_skill_entry(engine: &Engine, dir: &Path, name: &str) -> Result<SkillEntr
         .map_err(|e| format!("missing or unreadable schema.js: {e}"))?;
     let description = fs::read_to_string(&description_path)
         .map_err(|e| format!("missing or unreadable DESCRIPTION.md: {e}"))?;
+    let instruction_source = match fs::read_to_string(&instruction_path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(format!("unreadable INSTRUCTION.md: {e}")),
+    };
 
-    let schema_envelope = crate::evaluate_schema_for_mcp(engine, &skill_source, &schema_source)
-        .map_err(|e| format!("schema.js evaluation failed: {e}"))?;
+    let schema_envelope =
+        crate::evaluate_schema_for_mcp(engine, &skill_source, &schema_source, &instruction_source)
+            .map_err(|e| format!("schema.js evaluation failed: {e}"))?;
 
     let input_schema = schema_envelope
         .get("input")
@@ -131,6 +140,7 @@ fn load_skill_entry(engine: &Engine, dir: &Path, name: &str) -> Result<SkillEntr
         input_schema,
         skill_source,
         schema_source,
+        instruction_source,
     })
 }
 
@@ -153,6 +163,7 @@ mod tests {
             input_schema: json!({ "type": "object" }),
             skill_source: String::new(),
             schema_source: String::new(),
+            instruction_source: String::new(),
         }
     }
 
