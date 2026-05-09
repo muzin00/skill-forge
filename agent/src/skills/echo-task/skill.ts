@@ -1,5 +1,3 @@
-import { defineTask } from '../../lib/defineTask.js';
-
 const PROMPT = `# Echo task
 
 The user message is a JSON object with a "message" field which is an array of strings.

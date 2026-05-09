@@ -4,21 +4,10 @@ declare function defineSkill<TInput, TOutput>(
 
 declare function defineSchema(
   inputSchema: Record<string, unknown>,
-  outputSchema?: Record<string, unknown>,
+  outputSchema?: Record<string, unknown> | null,
 ): void;
 
 declare function defineArgs(args: { positional?: string }): void;
-
-declare function invokeSkill<TOutput = unknown>(
-  name: string,
-  input?: unknown,
-): Promise<TOutput>;
-
-declare function execCmd(cmd: string, args: string[]): Promise<string>;
-
-declare function log(message: string): void;
-
-declare function getInstruction(): string;
 
 declare function defineTask<TInput, TOutput>(opts: {
   allowSkills: string[];
@@ -33,7 +22,9 @@ declare function getRegisteredSchema():
     }
   | undefined;
 
-declare module '*.md' {
-  const content: string;
-  export default content;
-}
+declare function getInstruction(): string;
+
+declare function invokeSkill<TOutput = unknown>(
+  name: string,
+  input?: unknown,
+): Promise<TOutput>;

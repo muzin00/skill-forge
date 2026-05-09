@@ -12,44 +12,70 @@ import { messages as hostAnthropicMessages } from 'skill-forge:runtime/anthropic
 import { invoke as hostInvoke } from 'skill-forge:runtime/invoke-host';
 import { log as hostLog } from 'skill-forge:runtime/log-host';
 import { getInstruction as hostGetInstruction } from 'skill-forge:runtime/instruction-loader-host';
+import type { ErrorCode } from './generated/interfaces/skill-forge-runtime-types.js';
 
-globalThis.callLlm = async function callLlm(prompt, input) {
+interface SkillErrorPayload {
+  code: ErrorCode;
+  message: string;
+  stack?: string;
+}
+
+interface SkillRuntimeError extends Error {
+  payload: SkillErrorPayload;
+}
+
+const g = globalThis as unknown as Record<string, unknown>;
+
+g.callLlm = async function callLlm(
+  prompt: string,
+  input?: unknown,
+): Promise<string> {
   return hostCallLlm(prompt, JSON.stringify(input ?? {}));
 };
 
-globalThis.execCmd = async function execCmd(cmd, args) {
+g.execCmd = async function execCmd(
+  cmd: string,
+  args: string[],
+): Promise<string> {
   return hostExecCmd(cmd, args);
 };
 
-globalThis.log = function log(message) {
+g.log = function log(message: string): void {
   hostLog(message);
 };
 
-globalThis.getInstruction = function getInstruction() {
+g.getInstruction = function getInstruction(): string {
   return hostGetInstruction();
 };
 
-globalThis.anthropicMessages = function anthropicMessages(bodyJson) {
+g.anthropicMessages = function anthropicMessages(bodyJson: string): string {
   return hostAnthropicMessages(bodyJson);
 };
 
-globalThis.getSkillDescription = function getSkillDescription(skillName) {
+g.getSkillDescription = function getSkillDescription(skillName: string): string {
   return hostGetDescription(skillName);
 };
 
-globalThis.getSkillInputSchema = function getSkillInputSchema(skillName) {
+g.getSkillInputSchema = function getSkillInputSchema(
+  skillName: string,
+): Record<string, unknown> {
   const json = hostGetInputSchemaJson(skillName);
   return JSON.parse(json);
 };
 
-globalThis.invokeSkill = async function invokeSkill(name, input) {
+g.invokeSkill = async function invokeSkill(
+  name: string,
+  input?: unknown,
+): Promise<unknown> {
   const argsJson = JSON.stringify(input ?? {});
-  let resultJson;
+  let resultJson: string;
   try {
     resultJson = hostInvoke(name, argsJson);
   } catch (e) {
-    const payload = e?.payload ?? {};
-    const err = new Error(payload.message ?? e?.message ?? String(e));
+    const payload = (e as { payload?: Partial<SkillErrorPayload> })?.payload ?? {};
+    const err = new Error(
+      payload.message ?? (e as Error)?.message ?? String(e),
+    ) as Error & { code?: string };
     err.code = payload.code;
     if (payload.stack) err.stack = payload.stack;
     throw err;
@@ -57,12 +83,17 @@ globalThis.invokeSkill = async function invokeSkill(name, input) {
   return JSON.parse(resultJson);
 };
 
-let __registered__;
-let __registered_schema__;
-let __registered_args__;
+let __registered__: ((input: unknown) => Promise<unknown>) | undefined;
+let __registered_schema__:
+  | {
+      input: Record<string, unknown>;
+      output: Record<string, unknown> | null;
+    }
+  | undefined;
+let __registered_args__: Record<string, unknown> | undefined;
 
 Object.defineProperty(globalThis, 'defineSkill', {
-  value: function defineSkill(runFn) {
+  value: function defineSkill(runFn: (input: unknown) => Promise<unknown>) {
     if (typeof runFn !== 'function') {
       throw skillError(
         'runtime-error',
@@ -95,7 +126,7 @@ Object.defineProperty(globalThis, 'getRegisteredSchema', {
 });
 
 Object.defineProperty(globalThis, 'defineArgs', {
-  value: function defineArgs(args) {
+  value: function defineArgs(args: unknown) {
     if (args === null || typeof args !== 'object' || Array.isArray(args)) {
       const got =
         args === null ? 'null' : Array.isArray(args) ? 'array' : typeof args;
@@ -107,14 +138,17 @@ Object.defineProperty(globalThis, 'defineArgs', {
     if (__registered_args__ !== undefined) {
       throw skillError('runtime-error', 'defineArgs called more than once');
     }
-    __registered_args__ = args;
+    __registered_args__ = args as Record<string, unknown>;
   },
   writable: false,
   configurable: false,
 });
 
 Object.defineProperty(globalThis, 'defineSchema', {
-  value: function defineSchema(inputSchema, outputSchema) {
+  value: function defineSchema(
+    inputSchema: unknown,
+    outputSchema?: unknown,
+  ) {
     if (
       inputSchema === null ||
       typeof inputSchema !== 'object' ||
@@ -144,16 +178,54 @@ Object.defineProperty(globalThis, 'defineSchema', {
       throw skillError('runtime-error', 'defineSchema called more than once');
     }
     __registered_schema__ = {
-      input: inputSchema,
-      output: outputSchema ?? null,
+      input: inputSchema as Record<string, unknown>,
+      output: (outputSchema ?? null) as Record<string, unknown> | null,
     };
   },
   writable: false,
   configurable: false,
 });
 
-let skillModule = null;
-let schemaModule = null;
+const DEFAULT_TASK_MAX_ITERATIONS = 15;
+
+Object.defineProperty(globalThis, 'defineTask', {
+  value: function defineTask(opts: {
+    allowSkills: string[];
+    maxIterations?: number;
+  }) {
+    defineSkill(async (input: unknown): Promise<unknown> => {
+      const schema = getRegisteredSchema();
+      if (!schema || !schema.output) {
+        throw skillError(
+          'runtime-error',
+          'defineTask requires defineSchema to be called with both inputSchema and outputSchema',
+        );
+      }
+      const prompt = getInstruction();
+      if (!prompt) {
+        throw skillError(
+          'runtime-error',
+          'defineTask requires INSTRUCTION.md alongside skill.js (getInstruction() returned empty string)',
+        );
+      }
+      return invokeSkill('loop-llm', {
+        prompt,
+        context: JSON.stringify(input),
+        allowSkills: opts.allowSkills,
+        outputSchema: schema.output,
+        maxIterations: opts.maxIterations ?? DEFAULT_TASK_MAX_ITERATIONS,
+      });
+    });
+  },
+  writable: false,
+  configurable: false,
+});
+
+let skillModule: { run: (input: unknown) => Promise<unknown> } | null = null;
+let schemaModule: {
+  schema: { input: Record<string, unknown>; output: Record<string, unknown> | null };
+  args: Record<string, unknown> | null;
+} | null = null;
 
 function loadSkill() {
   if (skillModule !== null) return skillModule;
@@ -197,22 +269,27 @@ function loadSchema() {
   return schemaModule;
 }
 
-function skillError(code, message, stack) {
-  const e = new Error(message);
-  e.payload = { code, message, stack: stack ?? undefined };
+function skillError(
+  code: ErrorCode,
+  message: string,
+  stack?: string,
+): SkillRuntimeError {
+  const e = new Error(message) as SkillRuntimeError;
+  e.payload = { code, message, stack };
   return e;
 }
 
-function rethrow(e, defaultCode) {
-  if (e && e.payload && typeof e.payload.code === 'string') throw e.payload;
+function rethrow(e: unknown, defaultCode: ErrorCode): never {
+  const payload = (e as { payload?: SkillErrorPayload })?.payload;
+  if (payload && typeof payload.code === 'string') throw payload;
   throw {
     code: defaultCode,
-    message: e?.message ?? String(e),
-    stack: e?.stack ?? undefined,
+    message: (e as Error)?.message ?? String(e),
+    stack: (e as Error)?.stack,
   };
 }
 
-export async function run(argsJson) {
+export async function run(argsJson: string): Promise<string> {
   let mod;
   try {
     mod = loadSkill();
@@ -222,7 +299,7 @@ export async function run(argsJson) {
 
   if (typeof mod.run !== 'function') {
     throw {
-      code: 'runtime-error',
+      code: 'runtime-error' as ErrorCode,
       message: 'skill did not register a run function via defineSkill',
       stack: undefined,
     };
@@ -233,20 +310,20 @@ export async function run(argsJson) {
     args = JSON.parse(argsJson);
   } catch (e) {
     throw {
-      code: 'runtime-error',
-      message: `failed to parse args JSON: ${e?.message ?? String(e)}`,
-      stack: e?.stack ?? undefined,
+      code: 'runtime-error' as ErrorCode,
+      message: `failed to parse args JSON: ${(e as Error)?.message ?? String(e)}`,
+      stack: (e as Error)?.stack,
     };
   }
 
-  let result;
+  let result: unknown;
   try {
     result = await mod.run(args);
   } catch (e) {
     throw {
-      code: 'user-error',
-      message: e?.message ?? String(e),
-      stack: e?.stack ?? undefined,
+      code: 'user-error' as ErrorCode,
+      message: (e as Error)?.message ?? String(e),
+      stack: (e as Error)?.stack,
     };
   }
 
@@ -255,15 +332,15 @@ export async function run(argsJson) {
     json = JSON.stringify(result);
   } catch (e) {
     throw {
-      code: 'runtime-error',
-      message: `failed to stringify result: ${e?.message ?? String(e)}`,
-      stack: e?.stack ?? undefined,
+      code: 'runtime-error' as ErrorCode,
+      message: `failed to stringify result: ${(e as Error)?.message ?? String(e)}`,
+      stack: (e as Error)?.stack,
     };
   }
 
   if (json === undefined) {
     throw {
-      code: 'runtime-error',
+      code: 'runtime-error' as ErrorCode,
       message: 'result is not JSON-serializable (undefined)',
       stack: undefined,
     };
@@ -272,7 +349,7 @@ export async function run(argsJson) {
   return json;
 }
 
-export function getSchema() {
+export function getSchema(): string {
   let mod;
   try {
     mod = loadSchema();
@@ -291,15 +368,15 @@ export function getSchema() {
     json = JSON.stringify(envelope);
   } catch (e) {
     throw {
-      code: 'runtime-error',
-      message: `failed to stringify schema: ${e?.message ?? String(e)}`,
-      stack: e?.stack ?? undefined,
+      code: 'runtime-error' as ErrorCode,
+      message: `failed to stringify schema: ${(e as Error)?.message ?? String(e)}`,
+      stack: (e as Error)?.stack,
     };
   }
 
   if (json === undefined) {
     throw {
-      code: 'runtime-error',
+      code: 'runtime-error' as ErrorCode,
       message: 'schema is not JSON-serializable',
       stack: undefined,
     };
