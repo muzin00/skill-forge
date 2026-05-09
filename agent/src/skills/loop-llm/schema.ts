@@ -14,6 +14,12 @@ defineSchema({
       items: { type: 'string' },
       description: 'Names of skills the LLM can call as tools',
     },
+    allowCommands: {
+      type: 'array',
+      items: { type: 'string' },
+      description:
+        'Command prefixes the LLM can call as tools. Each entry (e.g. "gh issue") becomes a tool named by joining with "-" (e.g. "gh-issue") whose input is { args: string[] } and which runs `<entry> <args...>` via execCmd. Args are passed as argv (no shell evaluation).',
+    },
     outputSchema: {
       type: 'object',
       description:
