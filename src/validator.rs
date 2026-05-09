@@ -1,13 +1,17 @@
 use serde_json::Value;
 
 #[derive(Copy, Clone)]
-pub enum Context {
-    Input,
+pub enum Context<'a> {
+    Input { positional: Option<&'a str> },
     Output,
 }
 
-pub fn validate_input(value: &Value, schema: &Value) -> Result<(), String> {
-    validate_object(value, schema, Context::Input, "")
+pub fn validate_input(
+    value: &Value,
+    schema: &Value,
+    positional: Option<&str>,
+) -> Result<(), String> {
+    validate_object(value, schema, Context::Input { positional }, "")
 }
 
 pub fn validate_output(value: &Value, schema: &Value) -> Result<(), String> {
@@ -22,7 +26,7 @@ pub fn validate_output(value: &Value, schema: &Value) -> Result<(), String> {
 fn validate_object(
     value: &Value,
     schema: &Value,
-    ctx: Context,
+    ctx: Context<'_>,
     path: &str,
 ) -> Result<(), String> {
     let obj = match value.as_object() {
@@ -74,7 +78,7 @@ fn validate_object(
 fn validate_field(
     value: &Value,
     schema: &Value,
-    ctx: Context,
+    ctx: Context<'_>,
     path: &str,
 ) -> Result<(), String> {
     let ty = schema.get("type").and_then(|t| t.as_str()).unwrap_or("string");
@@ -165,16 +169,20 @@ enum ErrorKind {
     EnumViolation { allowed: Vec<Value>, got: Value },
 }
 
-fn format_error(ctx: Context, path: &str, kind: ErrorKind) -> String {
+fn format_error(ctx: Context<'_>, path: &str, kind: ErrorKind) -> String {
     match ctx {
-        Context::Input => format_input_error(path, kind),
+        Context::Input { positional } => format_input_error(path, kind, positional),
         Context::Output => format_output_error(path, kind),
     }
 }
 
-fn format_input_error(path: &str, kind: ErrorKind) -> String {
+fn format_input_error(path: &str, kind: ErrorKind, positional: Option<&str>) -> String {
+    let is_positional = positional == Some(path);
     let kebab = path_to_kebab(path);
     match kind {
+        ErrorKind::Required if is_positional => {
+            format!("Error: <{path}>: positional argument required")
+        }
         ErrorKind::Required => format!("Error: --{kebab}: required"),
         ErrorKind::Unknown => format!("Error: --{kebab}: unknown flag"),
         ErrorKind::TypeMismatch { expected, got } => format!(
@@ -290,7 +298,7 @@ mod tests {
             "required": ["userName"],
             "additionalProperties": false
         });
-        let err = validate_input(&json!({}), &schema).unwrap_err();
+        let err = validate_input(&json!({}), &schema, None).unwrap_err();
         assert_eq!(err, "Error: --user-name: required");
     }
 
@@ -301,7 +309,7 @@ mod tests {
             "properties": { "count": { "type": "integer" } },
             "required": ["count"]
         });
-        let err = validate_input(&json!({ "count": "abc" }), &schema).unwrap_err();
+        let err = validate_input(&json!({ "count": "abc" }), &schema, None).unwrap_err();
         assert_eq!(err, "Error: --count: expected integer, got \"abc\"");
     }
 
@@ -312,7 +320,7 @@ mod tests {
             "properties": { "count": { "type": "integer" } },
             "required": ["count"]
         });
-        let err = validate_input(&json!({ "count": 1.5 }), &schema).unwrap_err();
+        let err = validate_input(&json!({ "count": 1.5 }), &schema, None).unwrap_err();
         assert_eq!(err, "Error: --count: expected integer, got 1.5");
     }
 
@@ -325,7 +333,7 @@ mod tests {
             },
             "required": ["color"]
         });
-        let err = validate_input(&json!({ "color": "purple" }), &schema).unwrap_err();
+        let err = validate_input(&json!({ "color": "purple" }), &schema, None).unwrap_err();
         assert_eq!(
             err,
             "Error: --color: must be one of [\"red\", \"green\", \"blue\"], got \"purple\""
@@ -339,7 +347,7 @@ mod tests {
             "properties": {},
             "additionalProperties": false
         });
-        let err = validate_input(&json!({ "mystery": "x" }), &schema).unwrap_err();
+        let err = validate_input(&json!({ "mystery": "x" }), &schema, None).unwrap_err();
         assert_eq!(err, "Error: --mystery: unknown flag");
     }
 
@@ -351,7 +359,7 @@ mod tests {
                 "tags": { "type": "array", "items": { "type": "string" } }
             }
         });
-        let err = validate_input(&json!({ "tags": ["a", 42] }), &schema).unwrap_err();
+        let err = validate_input(&json!({ "tags": ["a", 42] }), &schema, None).unwrap_err();
         assert_eq!(err, "Error: --tags: expected string, got 42");
     }
 
@@ -366,7 +374,7 @@ mod tests {
                 }
             }
         });
-        let err = validate_input(&json!({ "colors": ["red", "purple"] }), &schema).unwrap_err();
+        let err = validate_input(&json!({ "colors": ["red", "purple"] }), &schema, None).unwrap_err();
         assert_eq!(
             err,
             "Error: --colors: must be one of [\"red\", \"blue\"], got \"purple\""
@@ -396,6 +404,7 @@ mod tests {
                 "tags": ["a", "b"]
             }),
             &schema,
+            None,
         )
         .unwrap();
     }

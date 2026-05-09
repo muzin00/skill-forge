@@ -4,20 +4,25 @@ use serde_json::{Map, Value};
 
 use crate::validator::{self, camel_to_kebab, format_enum, format_value, kebab_to_camel};
 
-pub fn build_args_json(schema: &Value, argv: &[String]) -> Result<String, String> {
-    let mut map = parse_argv_to_partial(schema, argv)?;
+pub fn build_args_json(
+    schema: &Value,
+    positional_prop: Option<&str>,
+    argv: &[String],
+) -> Result<String, String> {
+    let mut map = parse_argv_to_partial(schema, positional_prop, argv)?;
     apply_boolean_defaults(&mut map, schema);
     let value = Value::Object(map);
-    validator::validate_input(&value, schema)?;
+    validator::validate_input(&value, schema, positional_prop)?;
     Ok(value.to_string())
 }
 
 pub fn build_args_json_with_stdin(
     schema: &Value,
+    positional_prop: Option<&str>,
     argv: &[String],
     stdin: &Value,
 ) -> Result<String, String> {
-    let argv_overrides = parse_argv_to_partial(schema, argv)?;
+    let argv_overrides = parse_argv_to_partial(schema, positional_prop, argv)?;
     let mut map = match stdin {
         Value::Object(o) => o.clone(),
         Value::Null => Map::new(),
@@ -33,12 +38,13 @@ pub fn build_args_json_with_stdin(
     }
     apply_boolean_defaults(&mut map, schema);
     let value = Value::Object(map);
-    validator::validate_input(&value, schema)?;
+    validator::validate_input(&value, schema, positional_prop)?;
     Ok(value.to_string())
 }
 
 fn parse_argv_to_partial(
     schema: &Value,
+    positional_prop: Option<&str>,
     argv: &[String],
 ) -> Result<Map<String, Value>, String> {
     let properties = schema
@@ -58,11 +64,35 @@ fn parse_argv_to_partial(
 
     let mut result: Map<String, Value> = Map::new();
 
+    let positional_items_ty = positional_prop
+        .and_then(|name| properties.get(name))
+        .and_then(|prop| prop.get("items"))
+        .and_then(|items| items.get("type"))
+        .and_then(|t| t.as_str())
+        .unwrap_or("string")
+        .to_string();
+
+    let mut seen_double_dash = false;
     let mut i = 0;
     while i < argv.len() {
         let token = &argv[i];
-        if !token.starts_with("--") || token.len() == 2 {
-            return Err(format!("Error: {token}: unexpected positional argument"));
+
+        if seen_double_dash {
+            push_positional(&mut result, positional_prop, token, &positional_items_ty)?;
+            i += 1;
+            continue;
+        }
+
+        if token == "--" {
+            seen_double_dash = true;
+            i += 1;
+            continue;
+        }
+
+        if !token.starts_with("--") {
+            push_positional(&mut result, positional_prop, token, &positional_items_ty)?;
+            i += 1;
+            continue;
         }
         let flag = &token[2..];
 
@@ -109,7 +139,8 @@ fn parse_argv_to_partial(
                 .and_then(|x| x.get("type"))
                 .and_then(|t| t.as_str())
                 .unwrap_or("string");
-            let item = parse_typed_value(&raw_value, item_ty, flag)?;
+            let flag_label = format!("--{flag}");
+            let item = parse_typed_value(&raw_value, item_ty, &flag_label)?;
             if let Some(items_enum) = prop_schema
                 .get("items")
                 .and_then(|x| x.get("enum"))
@@ -129,7 +160,8 @@ fn parse_argv_to_partial(
                 a.push(item);
             }
         } else {
-            let parsed = parse_typed_value(&raw_value, ty, flag)?;
+            let flag_label = format!("--{flag}");
+            let parsed = parse_typed_value(&raw_value, ty, &flag_label)?;
             if let Some(enum_values) = prop_schema.get("enum").and_then(|e| e.as_array())
                 && !enum_values.iter().any(|v| v == &parsed)
             {
@@ -144,6 +176,27 @@ fn parse_argv_to_partial(
     }
 
     Ok(result)
+}
+
+fn push_positional(
+    result: &mut Map<String, Value>,
+    positional_prop: Option<&str>,
+    token: &str,
+    items_ty: &str,
+) -> Result<(), String> {
+    let name = match positional_prop {
+        Some(n) => n,
+        None => return Err(format!("Error: {token}: unexpected positional argument")),
+    };
+    let label = format!("<{name}>");
+    let item = parse_typed_value(token, items_ty, &label)?;
+    let arr = result
+        .entry(name.to_string())
+        .or_insert_with(|| Value::Array(vec![]));
+    if let Some(a) = arr.as_array_mut() {
+        a.push(item);
+    }
+    Ok(())
 }
 
 fn apply_boolean_defaults(map: &mut Map<String, Value>, schema: &Value) {
@@ -161,7 +214,7 @@ fn apply_boolean_defaults(map: &mut Map<String, Value>, schema: &Value) {
     }
 }
 
-fn parse_typed_value(raw: &str, ty: &str, flag: &str) -> Result<Value, String> {
+fn parse_typed_value(raw: &str, ty: &str, label: &str) -> Result<Value, String> {
     match ty {
         "string" => Ok(Value::String(raw.to_string())),
         "integer" => {
@@ -176,13 +229,13 @@ fn parse_typed_value(raw: &str, ty: &str, flag: &str) -> Result<Value, String> {
                 });
             if !valid {
                 return Err(format!(
-                    "Error: --{flag}: expected integer, got {}",
+                    "Error: {label}: expected integer, got {}",
                     format_raw(raw)
                 ));
             }
             let n: i64 = raw.parse().map_err(|_| {
                 format!(
-                    "Error: --{flag}: expected integer, got {}",
+                    "Error: {label}: expected integer, got {}",
                     format_raw(raw)
                 )
             })?;
@@ -190,21 +243,21 @@ fn parse_typed_value(raw: &str, ty: &str, flag: &str) -> Result<Value, String> {
         }
         "number" => {
             let n: f64 = raw.parse().map_err(|_| {
-                format!("Error: --{flag}: expected number, got {}", format_raw(raw))
+                format!("Error: {label}: expected number, got {}", format_raw(raw))
             })?;
             if n.is_nan() || n.is_infinite() {
                 return Err(format!(
-                    "Error: --{flag}: expected number, got {}",
+                    "Error: {label}: expected number, got {}",
                     format_raw(raw)
                 ));
             }
             let num = serde_json::Number::from_f64(n).ok_or_else(|| {
-                format!("Error: --{flag}: expected number, got {}", format_raw(raw))
+                format!("Error: {label}: expected number, got {}", format_raw(raw))
             })?;
             Ok(Value::Number(num))
         }
         "boolean" => Err(format!(
-            "Error: --{flag}: boolean flag does not take a value"
+            "Error: {label}: boolean flag does not take a value"
         )),
         _ => Ok(Value::String(raw.to_string())),
     }
@@ -247,7 +300,7 @@ mod tests {
             s("--tags"), s("a"), s("--tags"), s("b"),
             s("--color"), s("red"),
         ];
-        let json_str = build_args_json(&schema, &argv).expect("should succeed");
+        let json_str = build_args_json(&schema, None, &argv).expect("should succeed");
         let v: Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(
             v,
@@ -274,7 +327,7 @@ mod tests {
             "additionalProperties": false
         });
         let argv = vec![s("--name"), s("alice")];
-        let json_str = build_args_json(&schema, &argv).unwrap();
+        let json_str = build_args_json(&schema, None, &argv).unwrap();
         let v: Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(v, json!({ "name": "alice", "verbose": false }));
     }
@@ -289,7 +342,7 @@ mod tests {
             "additionalProperties": false
         });
         let argv: Vec<String> = vec![];
-        let json_str = build_args_json(&schema, &argv).unwrap();
+        let json_str = build_args_json(&schema, None, &argv).unwrap();
         let v: Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(v, json!({}));
     }
@@ -302,7 +355,7 @@ mod tests {
             "required": ["count"],
             "additionalProperties": false
         });
-        let err = build_args_json(&schema, &[s("--count"), s("abc")]).unwrap_err();
+        let err = build_args_json(&schema, None, &[s("--count"), s("abc")]).unwrap_err();
         assert_eq!(err, "Error: --count: expected integer, got \"abc\"");
     }
 
@@ -314,7 +367,7 @@ mod tests {
             "required": ["count"],
             "additionalProperties": false
         });
-        let err = build_args_json(&schema, &[s("--count"), s("1.5")]).unwrap_err();
+        let err = build_args_json(&schema, None, &[s("--count"), s("1.5")]).unwrap_err();
         assert_eq!(err, "Error: --count: expected integer, got \"1.5\"");
     }
 
@@ -326,7 +379,7 @@ mod tests {
             "required": ["ratio"],
             "additionalProperties": false
         });
-        let err = build_args_json(&schema, &[s("--ratio"), s("NaN")]).unwrap_err();
+        let err = build_args_json(&schema, None, &[s("--ratio"), s("NaN")]).unwrap_err();
         assert_eq!(err, "Error: --ratio: expected number, got \"NaN\"");
     }
 
@@ -338,7 +391,7 @@ mod tests {
             "required": ["userName"],
             "additionalProperties": false
         });
-        let err = build_args_json(&schema, &[]).unwrap_err();
+        let err = build_args_json(&schema, None, &[]).unwrap_err();
         assert_eq!(err, "Error: --user-name: required");
     }
 
@@ -352,7 +405,7 @@ mod tests {
             "required": ["color"],
             "additionalProperties": false
         });
-        let err = build_args_json(&schema, &[s("--color"), s("purple")]).unwrap_err();
+        let err = build_args_json(&schema, None, &[s("--color"), s("purple")]).unwrap_err();
         assert_eq!(
             err,
             "Error: --color: must be one of [\"red\", \"green\", \"blue\"], got \"purple\""
@@ -366,7 +419,7 @@ mod tests {
             "properties": {},
             "additionalProperties": false
         });
-        let err = build_args_json(&schema, &[s("--mystery"), s("foo")]).unwrap_err();
+        let err = build_args_json(&schema, None, &[s("--mystery"), s("foo")]).unwrap_err();
         assert_eq!(err, "Error: --mystery: unknown flag");
     }
 
@@ -378,7 +431,7 @@ mod tests {
             "required": ["count"],
             "additionalProperties": false
         });
-        let json_str = build_args_json(&schema, &[s("--count"), s("-3")]).unwrap();
+        let json_str = build_args_json(&schema, None, &[s("--count"), s("-3")]).unwrap();
         let v: Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(v, json!({ "count": -3 }));
     }
@@ -390,7 +443,7 @@ mod tests {
             "properties": {},
             "additionalProperties": true
         });
-        let json_str = build_args_json(&schema, &[]).unwrap();
+        let json_str = build_args_json(&schema, None, &[]).unwrap();
         let v: Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(v, json!({}));
     }
@@ -408,6 +461,7 @@ mod tests {
         });
         let err = build_args_json(
             &schema,
+            None,
             &[s("--count"), s("abc"), s("--ratio"), s("xyz")],
         )
         .unwrap_err();
@@ -426,7 +480,7 @@ mod tests {
             "additionalProperties": false
         });
         let stdin = json!({ "userName": "alice", "count": 7 });
-        let json_str = build_args_json_with_stdin(&schema, &[], &stdin).unwrap();
+        let json_str = build_args_json_with_stdin(&schema, None, &[], &stdin).unwrap();
         let v: Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(v, json!({ "userName": "alice", "count": 7 }));
     }
@@ -443,7 +497,7 @@ mod tests {
         });
         let stdin = json!({ "userName": "alice", "count": 7 });
         let argv = vec![s("--user-name"), s("bob")];
-        let json_str = build_args_json_with_stdin(&schema, &argv, &stdin).unwrap();
+        let json_str = build_args_json_with_stdin(&schema, None, &argv, &stdin).unwrap();
         let v: Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(v, json!({ "userName": "bob", "count": 7 }));
     }
@@ -458,7 +512,7 @@ mod tests {
             "required": ["count"]
         });
         let stdin = json!({ "count": "not-a-number" });
-        let err = build_args_json_with_stdin(&schema, &[], &stdin).unwrap_err();
+        let err = build_args_json_with_stdin(&schema, None, &[], &stdin).unwrap_err();
         assert_eq!(
             err,
             "Error: --count: expected integer, got \"not-a-number\""
@@ -476,7 +530,7 @@ mod tests {
             "required": ["userName", "count"]
         });
         let stdin = json!({ "userName": "alice" });
-        let err = build_args_json_with_stdin(&schema, &[], &stdin).unwrap_err();
+        let err = build_args_json_with_stdin(&schema, None, &[], &stdin).unwrap_err();
         assert_eq!(err, "Error: --count: required");
     }
 
@@ -491,7 +545,7 @@ mod tests {
         });
         let stdin = json!({});
         let argv = vec![s("--user-name"), s("alice")];
-        let json_str = build_args_json_with_stdin(&schema, &argv, &stdin).unwrap();
+        let json_str = build_args_json_with_stdin(&schema, None, &argv, &stdin).unwrap();
         let v: Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(v, json!({ "userName": "alice" }));
     }
@@ -500,7 +554,132 @@ mod tests {
     fn stdin_non_object_rejected() {
         let schema = json!({ "type": "object", "properties": {} });
         let stdin = json!([1, 2, 3]);
-        let err = build_args_json_with_stdin(&schema, &[], &stdin).unwrap_err();
+        let err = build_args_json_with_stdin(&schema, None, &[], &stdin).unwrap_err();
         assert_eq!(err, "Error: stdin: expected JSON object, got [1, 2, 3]");
+    }
+
+    fn positional_files_schema() -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "files": { "type": "array", "items": { "type": "string" } },
+                "verbose": { "type": "boolean" }
+            },
+            "required": ["files"],
+            "additionalProperties": false
+        })
+    }
+
+    #[test]
+    fn positional_only_collects_into_array() {
+        let schema = positional_files_schema();
+        let argv = vec![s("a"), s("b"), s("c")];
+        let json_str = build_args_json(&schema, Some("files"), &argv).unwrap();
+        let v: Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(
+            v,
+            json!({ "files": ["a", "b", "c"], "verbose": false })
+        );
+    }
+
+    #[test]
+    fn positional_mixed_with_flag_after() {
+        let schema = positional_files_schema();
+        let argv = vec![s("a"), s("b"), s("--verbose")];
+        let json_str = build_args_json(&schema, Some("files"), &argv).unwrap();
+        let v: Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(v, json!({ "files": ["a", "b"], "verbose": true }));
+    }
+
+    #[test]
+    fn positional_mixed_with_flag_before() {
+        let schema = positional_files_schema();
+        let argv = vec![s("--verbose"), s("a"), s("b")];
+        let json_str = build_args_json(&schema, Some("files"), &argv).unwrap();
+        let v: Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(v, json!({ "files": ["a", "b"], "verbose": true }));
+    }
+
+    #[test]
+    fn positional_mixed_interleaved() {
+        let schema = positional_files_schema();
+        let argv = vec![s("a"), s("--verbose"), s("b")];
+        let json_str = build_args_json(&schema, Some("files"), &argv).unwrap();
+        let v: Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(v, json!({ "files": ["a", "b"], "verbose": true }));
+    }
+
+    #[test]
+    fn positional_double_dash_escapes_flag_like_token() {
+        let schema = positional_files_schema();
+        let argv = vec![s("--verbose"), s("--"), s("a"), s("--foo"), s("b")];
+        let json_str = build_args_json(&schema, Some("files"), &argv).unwrap();
+        let v: Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(
+            v,
+            json!({ "files": ["a", "--foo", "b"], "verbose": true })
+        );
+    }
+
+    #[test]
+    fn positional_unexpected_when_not_declared() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "verbose": { "type": "boolean" }
+            },
+            "additionalProperties": false
+        });
+        let err = build_args_json(&schema, None, &[s("hello")]).unwrap_err();
+        assert_eq!(err, "Error: hello: unexpected positional argument");
+    }
+
+    #[test]
+    fn positional_required_zero_args_uses_positional_error() {
+        let schema = positional_files_schema();
+        let err = build_args_json(&schema, Some("files"), &[]).unwrap_err();
+        assert_eq!(err, "Error: <files>: positional argument required");
+    }
+
+    #[test]
+    fn positional_integer_items_type_coercion() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "ports": { "type": "array", "items": { "type": "integer" } }
+            },
+            "required": ["ports"],
+            "additionalProperties": false
+        });
+        let argv = vec![s("80"), s("443"), s("8080")];
+        let json_str = build_args_json(&schema, Some("ports"), &argv).unwrap();
+        let v: Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(v, json!({ "ports": [80, 443, 8080] }));
+    }
+
+    #[test]
+    fn positional_integer_type_error_uses_positional_label() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "ports": { "type": "array", "items": { "type": "integer" } }
+            },
+            "required": ["ports"],
+            "additionalProperties": false
+        });
+        let err = build_args_json(&schema, Some("ports"), &[s("abc")]).unwrap_err();
+        assert_eq!(err, "Error: <ports>: expected integer, got \"abc\"");
+    }
+
+    #[test]
+    fn positional_filename_clashing_with_flag_name_via_double_dash() {
+        let schema = positional_files_schema();
+        let argv = vec![s("--"), s("--verbose"), s("a")];
+        let json_str = build_args_json(&schema, Some("files"), &argv).unwrap();
+        let v: Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(
+            v,
+            json!({ "files": ["--verbose", "a"], "verbose": false })
+        );
     }
 }

@@ -7,6 +7,8 @@ declare function defineSchema(
   outputSchema?: Record<string, unknown>,
 ): void;
 
+declare function defineArgs(args: { positional?: string }): void;
+
 declare function invokeSkill<TOutput = unknown>(
   name: string,
   input?: unknown,
@@ -20,6 +22,7 @@ declare function getRegisteredSchema():
   | {
       input: Record<string, unknown>;
       output: Record<string, unknown> | null;
+      args: Record<string, unknown> | null;
     }
   | undefined;
 

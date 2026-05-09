@@ -54,6 +54,7 @@ globalThis.invokeSkill = async function invokeSkill(name, input) {
 
 let __registered__;
 let __registered_schema__;
+let __registered_args__;
 
 Object.defineProperty(globalThis, 'defineSkill', {
   value: function defineSkill(runFn) {
@@ -77,7 +78,31 @@ Object.defineProperty(globalThis, 'getRegisteredSchema', {
     if (__registered_schema__ === undefined) {
       loadSchema();
     }
-    return __registered_schema__;
+    if (__registered_schema__ === undefined) return undefined;
+    return {
+      input: __registered_schema__.input,
+      output: __registered_schema__.output,
+      args: __registered_args__ ?? null,
+    };
+  },
+  writable: false,
+  configurable: false,
+});
+
+Object.defineProperty(globalThis, 'defineArgs', {
+  value: function defineArgs(args) {
+    if (args === null || typeof args !== 'object' || Array.isArray(args)) {
+      const got =
+        args === null ? 'null' : Array.isArray(args) ? 'array' : typeof args;
+      throw skillError(
+        'runtime-error',
+        `defineArgs argument must be an object, got ${got}`,
+      );
+    }
+    if (__registered_args__ !== undefined) {
+      throw skillError('runtime-error', 'defineArgs called more than once');
+    }
+    __registered_args__ = args;
   },
   writable: false,
   configurable: false,
@@ -148,6 +173,7 @@ function loadSchema() {
   if (schemaModule !== null) return schemaModule;
 
   __registered_schema__ = undefined;
+  __registered_args__ = undefined;
   const src = getSchemaSource();
   const factory = new Function(src);
   factory();
@@ -159,7 +185,10 @@ function loadSchema() {
     );
   }
 
-  schemaModule = { schema: __registered_schema__ };
+  schemaModule = {
+    schema: __registered_schema__,
+    args: __registered_args__ ?? null,
+  };
   return schemaModule;
 }
 
@@ -246,9 +275,15 @@ export function getSchema() {
     rethrow(e, 'runtime-error');
   }
 
+  const envelope = {
+    input: mod.schema.input,
+    output: mod.schema.output,
+    args: mod.args,
+  };
+
   let json;
   try {
-    json = JSON.stringify(mod.schema);
+    json = JSON.stringify(envelope);
   } catch (e) {
     throw {
       code: 'runtime-error',
