@@ -25,6 +25,7 @@ use skill_forge::runtime::anthropic_host::Host as AnthropicHost;
 use skill_forge::runtime::exec_host::Host as ExecHost;
 use skill_forge::runtime::invoke_host::Host as InvokeHost;
 use skill_forge::runtime::llm_host::Host as LlmHost;
+use skill_forge::runtime::log_host::Host as LogHost;
 use skill_forge::runtime::schema_loader_host::Host as SchemaLoaderHost;
 use skill_forge::runtime::skill_loader_host::Host as SkillLoaderHost;
 use skill_forge::runtime::types::{ErrorCode, Host as TypesHost};
@@ -389,6 +390,13 @@ impl InvokeHost for SkillState {
         let r = runtime.call_run(&mut store, &args_json)?;
         log_trace("invoke run()", started);
         Ok(r)
+    }
+}
+
+impl LogHost for SkillState {
+    fn log(&mut self, message: String) -> wasmtime::Result<()> {
+        eprintln!("{message}");
+        Ok(())
     }
 }
 

@@ -46,6 +46,10 @@ interface invoke-host {
   invoke: func(skill-name: string, args-json: string) -> result<string, skill-error>;
 }
 
+interface log-host {
+  log: func(message: string);
+}
+
 world skill-runtime {
   use types.{skill-error};
 
@@ -55,6 +59,7 @@ world skill-runtime {
   import exec-host;
   import anthropic-host;
   import invoke-host;
+  import log-host;
 
   export run: func(args-json: string) -> result<string, skill-error>;
   export get-schema: func() -> result<string, skill-error>;
