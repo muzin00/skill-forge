@@ -51,6 +51,10 @@ const SKILL_IMPLEMENTATION_CHECK_JS: &str =
     include_str!("../agent/dist/skills/implementation-check/skill.js");
 const SKILL_VIEW_ISSUE_JS: &str = include_str!("../agent/dist/skills/view-issue/skill.js");
 const SKILL_ECHO_TASK_JS: &str = include_str!("../agent/dist/skills/echo-task/skill.js");
+const SKILL_VALIDATE_BRANCH_NAME_JS: &str =
+    include_str!("../agent/dist/skills/validate-branch-name/skill.js");
+const SKILL_ISSUE_CHECKOUT_JS: &str =
+    include_str!("../agent/dist/skills/issue-checkout/skill.js");
 
 const SCHEMA_CALL_LLM_JS: &str = include_str!("../agent/dist/skills/call-llm/schema.js");
 const SCHEMA_GENERATE_SKILL_CODE_JS: &str =
@@ -67,6 +71,10 @@ const SCHEMA_IMPLEMENTATION_CHECK_JS: &str =
     include_str!("../agent/dist/skills/implementation-check/schema.js");
 const SCHEMA_VIEW_ISSUE_JS: &str = include_str!("../agent/dist/skills/view-issue/schema.js");
 const SCHEMA_ECHO_TASK_JS: &str = include_str!("../agent/dist/skills/echo-task/schema.js");
+const SCHEMA_VALIDATE_BRANCH_NAME_JS: &str =
+    include_str!("../agent/dist/skills/validate-branch-name/schema.js");
+const SCHEMA_ISSUE_CHECKOUT_JS: &str =
+    include_str!("../agent/dist/skills/issue-checkout/schema.js");
 
 const DESC_CALL_LLM: &str = include_str!("../agent/src/skills/call-llm/DESCRIPTION.md");
 const DESC_GENERATE_SKILL_CODE: &str =
@@ -83,9 +91,15 @@ const DESC_IMPLEMENTATION_CHECK: &str =
     include_str!("../agent/src/skills/implementation-check/DESCRIPTION.md");
 const DESC_VIEW_ISSUE: &str = include_str!("../agent/src/skills/view-issue/DESCRIPTION.md");
 const DESC_ECHO_TASK: &str = include_str!("../agent/src/skills/echo-task/DESCRIPTION.md");
+const DESC_VALIDATE_BRANCH_NAME: &str =
+    include_str!("../agent/src/skills/validate-branch-name/DESCRIPTION.md");
+const DESC_ISSUE_CHECKOUT: &str =
+    include_str!("../agent/src/skills/issue-checkout/DESCRIPTION.md");
 
 const INSTRUCTION_IMPLEMENTATION_CHECK: &str =
     include_str!("../agent/src/skills/implementation-check/INSTRUCTION.md");
+const INSTRUCTION_ISSUE_CHECKOUT: &str =
+    include_str!("../agent/src/skills/issue-checkout/INSTRUCTION.md");
 
 const MAX_INVOKE_DEPTH: usize = 8;
 
@@ -161,6 +175,20 @@ const BUILTIN_SKILLS: &[(&str, &str, &str, &str, &str)] = &[
         SCHEMA_ECHO_TASK_JS,
         DESC_ECHO_TASK,
         "",
+    ),
+    (
+        "validate-branch-name",
+        SKILL_VALIDATE_BRANCH_NAME_JS,
+        SCHEMA_VALIDATE_BRANCH_NAME_JS,
+        DESC_VALIDATE_BRANCH_NAME,
+        "",
+    ),
+    (
+        "issue-checkout",
+        SKILL_ISSUE_CHECKOUT_JS,
+        SCHEMA_ISSUE_CHECKOUT_JS,
+        DESC_ISSUE_CHECKOUT,
+        INSTRUCTION_ISSUE_CHECKOUT,
     ),
 ];
 
