@@ -15,6 +15,8 @@ const SKILLS = [
   'implementation-check',
   'view-issue',
   'echo-task',
+  'validate-branch-name',
+  'issue-checkout',
 ];
 
 const rawMarkdownPlugin = {
