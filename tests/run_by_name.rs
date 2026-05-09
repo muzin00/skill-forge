@@ -142,6 +142,26 @@ fn positional_and_skill_are_mutually_exclusive() {
 }
 
 #[test]
+fn omitting_model_uses_haiku_default() {
+    let home = FakeHome::new("default-model");
+    home.install_skill("hello");
+
+    let out = run_with_home(
+        home.path(),
+        &["run", "hello", "--key", "value"],
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "expected zero exit when --model is omitted\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    let v: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("output is not valid JSON: {e}\nstdout:\n{stdout}"));
+    assert_eq!(v, serde_json::json!({ "key": "value" }));
+}
+
+#[test]
 fn missing_both_name_and_skill_errors() {
     let home = FakeHome::new("missing");
 
