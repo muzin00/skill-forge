@@ -12,6 +12,10 @@ declare function invokeSkill<TOutput = unknown>(
   input?: unknown,
 ): Promise<TOutput>;
 
+declare function execCmd(cmd: string, args: string[]): Promise<string>;
+
+declare function log(message: string): void;
+
 declare function getRegisteredSchema():
   | {
       input: Record<string, unknown>;

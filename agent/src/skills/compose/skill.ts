@@ -3,6 +3,8 @@ interface ComposeInput {
 }
 
 defineSkill(async (input: ComposeInput): Promise<{ wrapped: unknown }> => {
-  const echoed = await invokeSkill('echo', input.value);
+  const message =
+    typeof input.value === 'string' ? input.value : JSON.stringify(input.value);
+  const echoed = await invokeSkill('echo', { message });
   return { wrapped: echoed };
 });

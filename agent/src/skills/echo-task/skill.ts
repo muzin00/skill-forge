@@ -17,6 +17,6 @@ interface EchoTaskOutput {
 
 defineTask<EchoTaskInput, EchoTaskOutput>({
   prompt: PROMPT,
-  allowSkills: [],
+  allowSkills: ['echo'],
   maxIterations: 3,
 });

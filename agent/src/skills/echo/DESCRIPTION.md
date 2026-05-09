@@ -1,1 +1,1 @@
-Pass through the input value unchanged. Use for testing or as a no-op composition step.
+Run the system `echo` command with the given `message` via `execCmd`. Returns an empty object — useful as a side-effect-only tool.
