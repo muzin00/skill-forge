@@ -1024,10 +1024,7 @@ fn parse_run_argv(argv: Vec<String>) -> RunArgs {
         }
     };
 
-    let model = model.unwrap_or_else(|| {
-        eprintln!("Error: --model: required");
-        std::process::exit(2);
-    });
+    let model = model.unwrap_or_else(|| "haiku".to_string());
 
     RunArgs {
         skill_source,
