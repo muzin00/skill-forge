@@ -1,5 +1,3 @@
-import { defineTask } from '../../lib/defineTask.js';
-
 interface ImplementationCheckInput {
   issueNumber: string;
 }

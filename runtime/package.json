@@ -4,10 +4,15 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "mkdir -p dist && jco componentize src/index.js --wit ../wit/skill-runtime.wit --world-name skill-runtime --disable http --disable fetch-event --out dist/skill-runtime.wasm"
+    "build:types": "jco types ../wit/skill-runtime.wit -o src/generated --world-name skill-runtime --quiet",
+    "build:bundle": "node build.mjs",
+    "build:wasm": "jco componentize dist/index.js --wit ../wit/skill-runtime.wit --world-name skill-runtime --disable http --disable fetch-event --out dist/skill-runtime.wasm",
+    "build": "npm run build:types && npm run build:bundle && npm run build:wasm"
   },
   "devDependencies": {
     "@bytecodealliance/componentize-js": "^0.18.0",
-    "@bytecodealliance/jco": "^1.10.0"
+    "@bytecodealliance/jco": "^1.10.0",
+    "rolldown": "^1.0.0-rc.18",
+    "typescript": "^5.6.0"
   }
 }
