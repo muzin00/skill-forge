@@ -22,6 +22,7 @@ declare function getInstruction(): string;
 
 declare function defineTask<TInput, TOutput>(opts: {
   allowSkills: string[];
+  allowCommands?: string[];
   maxIterations?: number;
 }): void;
 

@@ -11,6 +11,7 @@ declare function defineArgs(args: { positional?: string }): void;
 
 declare function defineTask<TInput, TOutput>(opts: {
   allowSkills: string[];
+  allowCommands?: string[];
   maxIterations?: number;
 }): void;
 

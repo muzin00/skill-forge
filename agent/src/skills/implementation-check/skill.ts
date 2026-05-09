@@ -8,5 +8,17 @@ interface ImplementationCheckResult {
 }
 
 defineTask<ImplementationCheckInput, ImplementationCheckResult>({
-  allowSkills: ['view-issue', 'read-file', 'grep-file'],
+  allowSkills: [],
+  allowCommands: [
+    'cat',
+    'head',
+    'tail',
+    'git grep',
+    'git log',
+    'git diff',
+    'git show',
+    'gh issue',
+    'find',
+    'ls',
+  ],
 });

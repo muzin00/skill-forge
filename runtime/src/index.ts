@@ -191,6 +191,7 @@ const DEFAULT_TASK_MAX_ITERATIONS = 15;
 Object.defineProperty(globalThis, 'defineTask', {
   value: function defineTask(opts: {
     allowSkills: string[];
+    allowCommands?: string[];
     maxIterations?: number;
   }) {
     defineSkill(async (input: unknown): Promise<unknown> => {
@@ -212,6 +213,7 @@ Object.defineProperty(globalThis, 'defineTask', {
         prompt,
         context: JSON.stringify(input),
         allowSkills: opts.allowSkills,
+        allowCommands: opts.allowCommands,
         outputSchema: schema.output,
         maxIterations: opts.maxIterations ?? DEFAULT_TASK_MAX_ITERATIONS,
       });

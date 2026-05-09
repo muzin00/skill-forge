@@ -1,1 +1,1 @@
-Evaluate whether a GitHub Issue or specification is in an implementable state. Uses loop-llm to fetch the Issue body via view-issue and verify references against the actual codebase via read-file / grep-file.
+Evaluate whether a GitHub Issue or specification is in an implementable state. Uses loop-llm with read-only CLI commands (gh issue, cat, git grep, find, etc.) to fetch the Issue body and cross-check references against the actual codebase.
