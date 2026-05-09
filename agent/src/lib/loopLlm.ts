@@ -224,11 +224,11 @@ async function dispatchTool(
   block: Extract<ContentBlock, { type: 'tool_use' }>,
   registry: Map<string, ToolKind>,
 ): Promise<RequestContentBlock> {
-  log(`[loop-llm] ${block.name} ${JSON.stringify(block.input)}`);
+  const inputJson = JSON.stringify(block.input);
   const entry = registry.get(block.name);
   if (!entry) {
     const msg = `tool not allowed: ${block.name}`;
-    log(`[loop-llm] ${block.name} → error: ${msg}`);
+    log(`[${block.name}] ${inputJson} -> error: ${msg}`);
     return {
       type: 'tool_result',
       tool_use_id: block.id,
@@ -241,7 +241,7 @@ async function dispatchTool(
       entry.kind === 'skill'
         ? await invokeSkillTool(block.name, block.input)
         : await invokeCommandTool(entry.cmd, entry.prefixRest, block.input);
-    log(`[loop-llm] ${block.name} → ${truncateForLog(content)}`);
+    log(`[${block.name}] ${inputJson} -> ${truncateForLog(content)}`);
     return {
       type: 'tool_result',
       tool_use_id: block.id,
@@ -249,7 +249,7 @@ async function dispatchTool(
     };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    log(`[loop-llm] ${block.name} → error: ${truncateForLog(msg)}`);
+    log(`[${block.name}] ${inputJson} -> error: ${truncateForLog(msg)}`);
     return {
       type: 'tool_result',
       tool_use_id: block.id,
