@@ -12,6 +12,13 @@ declare function invokeSkill<TOutput = unknown>(
   input?: unknown,
 ): Promise<TOutput>;
 
+declare function getRegisteredSchema():
+  | {
+      input: Record<string, unknown>;
+      output: Record<string, unknown> | null;
+    }
+  | undefined;
+
 declare module '*.md' {
   const content: string;
   export default content;
