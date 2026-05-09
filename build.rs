@@ -31,6 +31,9 @@ fn main() {
         println!(
             "cargo:rerun-if-changed=agent/src/skills/{skill}/DESCRIPTION.md"
         );
+        println!(
+            "cargo:rerun-if-changed=agent/src/skills/{skill}/INSTRUCTION.md"
+        );
     }
 
     let config = Config::new();
