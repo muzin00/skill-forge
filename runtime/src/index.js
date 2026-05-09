@@ -72,6 +72,17 @@ Object.defineProperty(globalThis, 'defineSkill', {
   configurable: false,
 });
 
+Object.defineProperty(globalThis, 'getRegisteredSchema', {
+  value: function getRegisteredSchema() {
+    if (__registered_schema__ === undefined) {
+      loadSchema();
+    }
+    return __registered_schema__;
+  },
+  writable: false,
+  configurable: false,
+});
+
 Object.defineProperty(globalThis, 'defineSchema', {
   value: function defineSchema(inputSchema, outputSchema) {
     if (

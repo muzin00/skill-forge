@@ -14,6 +14,7 @@ const SKILLS = [
   'loop-llm',
   'implementation-check',
   'view-issue',
+  'echo-task',
 ];
 
 const rawMarkdownPlugin = {

@@ -23,6 +23,8 @@ fn main() {
         "grep-file",
         "loop-llm",
         "implementation-check",
+        "view-issue",
+        "echo-task",
     ] {
         println!("cargo:rerun-if-changed=agent/dist/skills/{skill}/skill.js");
         println!("cargo:rerun-if-changed=agent/dist/skills/{skill}/schema.js");

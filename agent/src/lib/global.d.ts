@@ -12,6 +12,17 @@ declare function invokeSkill<TOutput = unknown>(
   input?: unknown,
 ): Promise<TOutput>;
 
+declare function execCmd(cmd: string, args: string[]): Promise<string>;
+
+declare function log(message: string): void;
+
+declare function getRegisteredSchema():
+  | {
+      input: Record<string, unknown>;
+      output: Record<string, unknown> | null;
+    }
+  | undefined;
+
 declare module '*.md' {
   const content: string;
   export default content;
