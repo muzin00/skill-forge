@@ -9,6 +9,9 @@ import {
 
 declare const getSkillDescription: (skillName: string) => string;
 declare const getSkillInputSchema: (skillName: string) => Record<string, unknown>;
+declare const log: (message: string) => void;
+
+const LOG_RESULT_MAX = 300;
 
 export interface LoopLlmOpts {
   context: string;
@@ -136,25 +139,10 @@ async function dispatchTool(
   block: Extract<ContentBlock, { type: 'tool_use' }>,
   allowedNames: Set<string>,
 ): Promise<RequestContentBlock> {
+  log(`[loop-llm] ${block.name} ${JSON.stringify(block.input)}`);
   if (!allowedNames.has(block.name)) {
-    return {
-      type: 'tool_result',
-      tool_use_id: block.id,
-      content: `tool not allowed: ${block.name}`,
-      is_error: true,
-    };
-  }
-  try {
-    const result = await invokeSkill(block.name, block.input);
-    const content =
-      typeof result === 'string' ? result : JSON.stringify(result, null, 2);
-    return {
-      type: 'tool_result',
-      tool_use_id: block.id,
-      content,
-    };
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
+    const msg = `tool not allowed: ${block.name}`;
+    log(`[loop-llm] ${block.name} → error: ${msg}`);
     return {
       type: 'tool_result',
       tool_use_id: block.id,
@@ -162,4 +150,31 @@ async function dispatchTool(
       is_error: true,
     };
   }
+  try {
+    const result = await invokeSkill(block.name, block.input);
+    const content =
+      typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+    log(`[loop-llm] ${block.name} → ${truncateForLog(content)}`);
+    return {
+      type: 'tool_result',
+      tool_use_id: block.id,
+      content,
+    };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    log(`[loop-llm] ${block.name} → error: ${truncateForLog(msg)}`);
+    return {
+      type: 'tool_result',
+      tool_use_id: block.id,
+      content: msg,
+      is_error: true,
+    };
+  }
+}
+
+function truncateForLog(s: string): string {
+  if (s.length <= LOG_RESULT_MAX) return s;
+  const head = s.slice(0, LOG_RESULT_MAX);
+  const remaining = s.length - LOG_RESULT_MAX;
+  return `${head}...(${remaining} more chars)`;
 }

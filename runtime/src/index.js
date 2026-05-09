@@ -10,6 +10,7 @@ import { callLlm as hostCallLlm } from 'skill-forge:runtime/llm-host';
 import { execCmd as hostExecCmd } from 'skill-forge:runtime/exec-host';
 import { messages as hostAnthropicMessages } from 'skill-forge:runtime/anthropic-host';
 import { invoke as hostInvoke } from 'skill-forge:runtime/invoke-host';
+import { log as hostLog } from 'skill-forge:runtime/log-host';
 
 globalThis.callLlm = async function callLlm(prompt, input) {
   return hostCallLlm(prompt, JSON.stringify(input ?? {}));
@@ -17,6 +18,10 @@ globalThis.callLlm = async function callLlm(prompt, input) {
 
 globalThis.execCmd = async function execCmd(cmd, args) {
   return hostExecCmd(cmd, args);
+};
+
+globalThis.log = function log(message) {
+  hostLog(message);
 };
 
 globalThis.anthropicMessages = function anthropicMessages(bodyJson) {
