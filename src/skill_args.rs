@@ -64,21 +64,39 @@ fn parse_argv_to_partial(
 
     let mut result: Map<String, Value> = Map::new();
 
-    let positional_items_ty = positional_prop
+    let positional_ty = positional_prop
         .and_then(|name| properties.get(name))
-        .and_then(|prop| prop.get("items"))
-        .and_then(|items| items.get("type"))
+        .and_then(|prop| prop.get("type"))
         .and_then(|t| t.as_str())
-        .unwrap_or("string")
+        .unwrap_or("")
         .to_string();
+    let positional_items_ty = if positional_ty == "array" {
+        positional_prop
+            .and_then(|name| properties.get(name))
+            .and_then(|prop| prop.get("items"))
+            .and_then(|items| items.get("type"))
+            .and_then(|t| t.as_str())
+            .unwrap_or("string")
+            .to_string()
+    } else {
+        "string".to_string()
+    };
 
+    let mut scalar_positional_consumed = false;
     let mut seen_double_dash = false;
     let mut i = 0;
     while i < argv.len() {
         let token = &argv[i];
 
         if seen_double_dash {
-            push_positional(&mut result, positional_prop, token, &positional_items_ty)?;
+            push_positional(
+                &mut result,
+                positional_prop,
+                &positional_ty,
+                &mut scalar_positional_consumed,
+                token,
+                &positional_items_ty,
+            )?;
             i += 1;
             continue;
         }
@@ -90,7 +108,14 @@ fn parse_argv_to_partial(
         }
 
         if !token.starts_with("--") {
-            push_positional(&mut result, positional_prop, token, &positional_items_ty)?;
+            push_positional(
+                &mut result,
+                positional_prop,
+                &positional_ty,
+                &mut scalar_positional_consumed,
+                token,
+                &positional_items_ty,
+            )?;
             i += 1;
             continue;
         }
@@ -181,6 +206,8 @@ fn parse_argv_to_partial(
 fn push_positional(
     result: &mut Map<String, Value>,
     positional_prop: Option<&str>,
+    positional_ty: &str,
+    scalar_consumed: &mut bool,
     token: &str,
     items_ty: &str,
 ) -> Result<(), String> {
@@ -190,11 +217,19 @@ fn push_positional(
     };
     let label = format!("<{name}>");
     let item = parse_typed_value(token, items_ty, &label)?;
-    let arr = result
-        .entry(name.to_string())
-        .or_insert_with(|| Value::Array(vec![]));
-    if let Some(a) = arr.as_array_mut() {
-        a.push(item);
+    if positional_ty == "string" {
+        if *scalar_consumed {
+            return Err(format!("Error: <{name}>: too many positional arguments"));
+        }
+        *scalar_consumed = true;
+        result.insert(name.to_string(), item);
+    } else {
+        let arr = result
+            .entry(name.to_string())
+            .or_insert_with(|| Value::Array(vec![]));
+        if let Some(a) = arr.as_array_mut() {
+            a.push(item);
+        }
     }
     Ok(())
 }
@@ -669,6 +704,68 @@ mod tests {
         });
         let err = build_args_json(&schema, Some("ports"), &[s("abc")]).unwrap_err();
         assert_eq!(err, "Error: <ports>: expected integer, got \"abc\"");
+    }
+
+    fn positional_issue_number_schema() -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "issueNumber": { "type": "string" },
+                "verbose": { "type": "boolean" }
+            },
+            "required": ["issueNumber"],
+            "additionalProperties": false
+        })
+    }
+
+    #[test]
+    fn positional_string_scalar_assigns_single_value() {
+        let schema = positional_issue_number_schema();
+        let argv = vec![s("123")];
+        let json_str = build_args_json(&schema, Some("issueNumber"), &argv).unwrap();
+        let v: Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(v, json!({ "issueNumber": "123", "verbose": false }));
+    }
+
+    #[test]
+    fn positional_string_scalar_rejects_second_positional() {
+        let schema = positional_issue_number_schema();
+        let argv = vec![s("123"), s("124")];
+        let err = build_args_json(&schema, Some("issueNumber"), &argv).unwrap_err();
+        assert_eq!(err, "Error: <issueNumber>: too many positional arguments");
+    }
+
+    #[test]
+    fn positional_string_scalar_flag_then_positional_overwrites() {
+        let schema = positional_issue_number_schema();
+        let argv = vec![s("--issue-number"), s("100"), s("200")];
+        let json_str = build_args_json(&schema, Some("issueNumber"), &argv).unwrap();
+        let v: Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(v, json!({ "issueNumber": "200", "verbose": false }));
+    }
+
+    #[test]
+    fn positional_string_scalar_positional_then_flag_overwrites() {
+        let schema = positional_issue_number_schema();
+        let argv = vec![s("100"), s("--issue-number"), s("200")];
+        let json_str = build_args_json(&schema, Some("issueNumber"), &argv).unwrap();
+        let v: Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(v, json!({ "issueNumber": "200", "verbose": false }));
+    }
+
+    #[test]
+    fn positional_string_scalar_required_zero_args_uses_positional_error() {
+        let schema = positional_issue_number_schema();
+        let err = build_args_json(&schema, Some("issueNumber"), &[]).unwrap_err();
+        assert_eq!(err, "Error: <issueNumber>: positional argument required");
+    }
+
+    #[test]
+    fn positional_string_scalar_double_dash_then_two_tokens_errors() {
+        let schema = positional_issue_number_schema();
+        let argv = vec![s("--"), s("100"), s("200")];
+        let err = build_args_json(&schema, Some("issueNumber"), &argv).unwrap_err();
+        assert_eq!(err, "Error: <issueNumber>: too many positional arguments");
     }
 
     #[test]

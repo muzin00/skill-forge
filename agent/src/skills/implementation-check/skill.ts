@@ -1,4 +1,4 @@
-import { loopLlm } from '../../lib/loopLlm.js';
+import { defineTask } from '../../lib/defineTask.js';
 
 interface ImplementationCheckInput {
   issueNumber: string;
@@ -58,28 +58,7 @@ Issue 本文だけでなく、実際のリポジトリのソースコードを�
 - 完璧な網羅性より、**確度の高い判定** を優先する。
 - 必ず output tool を **ちょうど 1 回** 呼び出して結果を返すこと。output tool を呼ばずに探索を続けると loop-exceeded で失敗する。`;
 
-const OUTPUT_SCHEMA = {
-  type: 'object',
-  properties: {
-    evaluation: {
-      type: 'string',
-      description: '評価結果のテキスト',
-    },
-    implementable: {
-      type: 'boolean',
-      description: '実装可能かどうか',
-    },
-  },
-  required: ['evaluation', 'implementable'],
-};
-
-defineSkill(
-  async (input: ImplementationCheckInput): Promise<ImplementationCheckResult> => {
-    return loopLlm<ImplementationCheckResult>(PROMPT, {
-      context: `評価対象: Issue #${input.issueNumber}`,
-      allowSkills: ['view-issue', 'read-file', 'grep-file'],
-      outputSchema: OUTPUT_SCHEMA,
-      maxIterations: 30,
-    });
-  },
-);
+defineTask<ImplementationCheckInput, ImplementationCheckResult>({
+  prompt: PROMPT,
+  allowSkills: ['view-issue', 'read-file', 'grep-file'],
+});
