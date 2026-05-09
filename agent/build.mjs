@@ -17,6 +17,7 @@ const SKILLS = [
   'echo-task',
   'validate-branch-name',
   'issue-checkout',
+  'pr-create',
 ];
 
 const rawMarkdownPlugin = {
