@@ -2,7 +2,11 @@ defineSchema(
   {
     type: 'object',
     properties: {
-      message: { type: 'string', description: 'Message to echo back' },
+      message: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Message tokens to echo',
+      },
     },
     required: ['message'],
     additionalProperties: false,
@@ -16,3 +20,5 @@ defineSchema(
     additionalProperties: false,
   },
 );
+
+defineArgs({ positional: 'message' });

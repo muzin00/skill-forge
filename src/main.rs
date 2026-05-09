@@ -10,6 +10,7 @@ use wasmtime::component::{Component, Linker, ResourceTable, bindgen};
 use wasmtime::{Config, Engine, Store};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiView};
 
+mod generated_args;
 mod generated_schema;
 mod mcp;
 mod skill_args;
@@ -313,8 +314,8 @@ impl SchemaLoaderHost for SkillState {
                 ));
             }
         };
-        let (input_schema, _output) = parse_schema_envelope(&envelope_json)?;
-        let json = serde_json::to_string(&input_schema)
+        let envelope = parse_schema_envelope(&envelope_json)?;
+        let json = serde_json::to_string(&envelope.input)
             .map_err(|e| anyhow::anyhow!("failed to serialize input schema: {e}"))?;
         Ok(json)
     }
@@ -730,9 +731,25 @@ fn run_skill_run(engine: &Engine, raw_argv: Vec<String>) -> Result<()> {
         }
     };
 
-    let (input_schema, output_schema) = parse_schema_envelope(&schema_json)?;
+    let SchemaEnvelope {
+        input: input_schema,
+        output: output_schema,
+        args: args_spec,
+    } = parse_schema_envelope(&schema_json)?;
 
-    let args_json = build_input_args_json(&input_schema, &skill_flag_argv)?;
+    if let Some(args_spec) = args_spec.as_ref() {
+        if let Err(msg) = generated_args::validate(args_spec, &input_schema) {
+            eprintln!("Error: {msg}");
+            std::process::exit(1);
+        }
+    }
+    let positional_prop = args_spec
+        .as_ref()
+        .and_then(|a| a.get("positional"))
+        .and_then(|p| p.as_str())
+        .map(|s| s.to_string());
+
+    let args_json = build_input_args_json(&input_schema, positional_prop.as_deref(), &skill_flag_argv)?;
 
     let started = Instant::now();
     let r = runtime.call_run(&mut store, &args_json)?;
@@ -767,9 +784,13 @@ fn run_skill_run(engine: &Engine, raw_argv: Vec<String>) -> Result<()> {
     Ok(())
 }
 
-fn parse_schema_envelope(
-    schema_json: &str,
-) -> Result<(serde_json::Value, Option<serde_json::Value>)> {
+struct SchemaEnvelope {
+    input: serde_json::Value,
+    output: Option<serde_json::Value>,
+    args: Option<serde_json::Value>,
+}
+
+fn parse_schema_envelope(schema_json: &str) -> Result<SchemaEnvelope> {
     let envelope: serde_json::Value = serde_json::from_str(schema_json)
         .with_context(|| format!("failed to parse schema JSON: {schema_json}"))?;
     let input = envelope
@@ -780,16 +801,25 @@ fn parse_schema_envelope(
         Some(serde_json::Value::Null) | None => None,
         Some(v) => Some(v.clone()),
     };
-    Ok((input, output))
+    let args = match envelope.get("args") {
+        Some(serde_json::Value::Null) | None => None,
+        Some(v) => Some(v.clone()),
+    };
+    Ok(SchemaEnvelope {
+        input,
+        output,
+        args,
+    })
 }
 
 fn build_input_args_json(
     input_schema: &serde_json::Value,
+    positional_prop: Option<&str>,
     skill_flag_argv: &[String],
 ) -> Result<String> {
     let stdin_is_tty = io::stdin().is_terminal();
     let result = if stdin_is_tty {
-        skill_args::build_args_json(input_schema, skill_flag_argv)
+        skill_args::build_args_json(input_schema, positional_prop, skill_flag_argv)
     } else {
         let mut buf = String::new();
         io::stdin()
@@ -806,7 +836,12 @@ fn build_input_args_json(
                 }
             }
         };
-        skill_args::build_args_json_with_stdin(input_schema, skill_flag_argv, &stdin_value)
+        skill_args::build_args_json_with_stdin(
+            input_schema,
+            positional_prop,
+            skill_flag_argv,
+            &stdin_value,
+        )
     };
     match result {
         Ok(json) => Ok(json),
