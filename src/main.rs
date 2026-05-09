@@ -305,6 +305,7 @@ struct SkillState {
     engine: Engine,
     component: Component,
     depth: usize,
+    verbose: bool,
 }
 
 impl WasiView for SkillState {
@@ -353,6 +354,7 @@ impl SchemaLoaderHost for SkillState {
         let linker = build_linker(&engine)
             .map_err(|e| anyhow::anyhow!("failed to build linker for schema lookup: {e}"))?;
         let next_depth = self.depth + 1;
+        let verbose = self.verbose;
         let (mut store, runtime) = instantiate(
             &engine,
             &component,
@@ -363,6 +365,7 @@ impl SchemaLoaderHost for SkillState {
             Profile::Builtin,
             llm_config,
             next_depth,
+            verbose,
         )
         .map_err(|e| anyhow::anyhow!("failed to instantiate skill for schema lookup: {e}"))?;
         let envelope_json = match runtime.call_get_schema(&mut store)? {
@@ -452,6 +455,7 @@ impl InvokeHost for SkillState {
         let llm_config = self.llm_config.clone();
         let linker = build_linker(&engine)
             .map_err(|e| anyhow::anyhow!("failed to build linker for invoke: {e}"))?;
+        let verbose = self.verbose;
         let (mut store, runtime) = instantiate(
             &engine,
             &component,
@@ -462,6 +466,7 @@ impl InvokeHost for SkillState {
             Profile::Builtin,
             llm_config,
             next_depth,
+            verbose,
         )
         .map_err(|e| anyhow::anyhow!("failed to instantiate skill for invoke: {e}"))?;
         let started = Instant::now();
@@ -473,7 +478,9 @@ impl InvokeHost for SkillState {
 
 impl LogHost for SkillState {
     fn log(&mut self, message: String) -> wasmtime::Result<()> {
-        eprintln!("{message}");
+        if self.verbose {
+            eprintln!("{message}");
+        }
         Ok(())
     }
 }
@@ -721,6 +728,7 @@ fn instantiate(
     profile: Profile,
     llm_config: Option<LlmConfig>,
     depth: usize,
+    verbose: bool,
 ) -> Result<(Store<SkillState>, SkillRuntime)> {
     let state = SkillState {
         ctx: WasiCtxBuilder::new().inherit_stdio().build(),
@@ -733,6 +741,7 @@ fn instantiate(
         engine: engine.clone(),
         component: component.clone(),
         depth,
+        verbose,
     };
     let mut store = Store::new(engine, state);
     let started = Instant::now();
@@ -747,6 +756,7 @@ fn run_skill_run(engine: &Engine, raw_argv: Vec<String>) -> Result<()> {
         model,
         backend,
         timeout,
+        verbose,
         skill_flags: skill_flag_argv,
     } = parse_run_argv(raw_argv);
 
@@ -803,6 +813,7 @@ fn run_skill_run(engine: &Engine, raw_argv: Vec<String>) -> Result<()> {
             timeout,
         }),
         0,
+        verbose,
     )?;
 
     let schema_started = Instant::now();
@@ -947,6 +958,7 @@ struct RunArgs {
     model: String,
     backend: Backend,
     timeout: Duration,
+    verbose: bool,
     skill_flags: Vec<String>,
 }
 
@@ -956,6 +968,7 @@ fn parse_run_argv(argv: Vec<String>) -> RunArgs {
     let mut model: Option<String> = None;
     let mut backend_flag: Option<Backend> = None;
     let mut timeout_flag: Option<u64> = None;
+    let mut verbose = false;
     let mut skill_flags: Vec<String> = Vec::new();
 
     let mut i = 0;
@@ -1024,6 +1037,14 @@ fn parse_run_argv(argv: Vec<String>) -> RunArgs {
                 }));
                 i += 2;
             }
+            "--verbose" => {
+                verbose = true;
+                i += 1;
+            }
+            "--help" | "-h" => {
+                print_run_usage();
+                std::process::exit(0);
+            }
             t if t == "--args" || t.starts_with("--args=") => {
                 eprintln!("Error: --args: unknown flag");
                 std::process::exit(2);
@@ -1071,8 +1092,24 @@ fn parse_run_argv(argv: Vec<String>) -> RunArgs {
         model,
         backend: resolve_backend(backend_flag),
         timeout: resolve_timeout(timeout_flag),
+        verbose,
         skill_flags,
     }
+}
+
+fn print_run_usage() {
+    println!(
+        "Usage: skill-forge run [<skill-name> | --skill <path>] [OPTIONS] [-- <skill-flags>]"
+    );
+    println!();
+    println!("Options:");
+    println!("  <skill-name>          Built-in or user-installed skill name");
+    println!("  --skill <path>        Path to a skill JS file (mutually exclusive with <skill-name>)");
+    println!("  --model <model>       Model alias or full ID (default: haiku)");
+    println!("  --backend <backend>   Backend: 'api' or 'claude'");
+    println!("  --timeout <secs>      Timeout in seconds");
+    println!("  --verbose             Print loop-llm tool call logs to stderr (off by default)");
+    println!("  -h, --help            Print this help");
 }
 
 fn schema_path_for(skill_path: &PathBuf) -> PathBuf {
@@ -1109,6 +1146,7 @@ pub(crate) fn evaluate_schema_for_mcp(
         Profile::User,
         None,
         0,
+        false,
     )?;
     let schema_result = runtime.call_get_schema(&mut store)?;
     let schema_json = match schema_result {
@@ -1141,6 +1179,7 @@ pub(crate) fn run_skill_for_mcp(
         Profile::User,
         llm_config,
         0,
+        false,
     )
     .map_err(|e| format!("instantiate failed: {e}"))?;
     let r = runtime
@@ -1188,6 +1227,7 @@ fn run_builtin_skill(
         Profile::Builtin,
         llm_config,
         0,
+        false,
     )?;
     let started = Instant::now();
     let r = runtime.call_run(&mut store, args_json)?;
