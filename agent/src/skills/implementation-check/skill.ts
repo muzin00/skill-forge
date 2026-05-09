@@ -1,7 +1,5 @@
 import { loopLlm } from '../../lib/loopLlm.js';
 
-declare const execCmd: (cmd: string, args: string[]) => Promise<string>;
-
 interface ImplementationCheckInput {
   issueNumber: string;
 }
@@ -22,6 +20,11 @@ const PROMPT = `# Issue・仕様が実装可能な状態か判定する
 - 技術的なアプローチ・設計方針があるか
 - 影響範囲・既存コードとの関連が把握できるか
 - 完了条件が明確か
+
+## Issue 内容の取得
+
+評価対象の Issue 本文は **必ず最初に view-issue skill を呼び出して取得** する。
+ユーザーメッセージに含まれる Issue 番号を view-issue の \`issue\` 引数に渡し、その出力をもとに評価を進める。
 
 ## ソースコードの探索・検証
 
@@ -72,11 +75,9 @@ const OUTPUT_SCHEMA = {
 
 defineSkill(
   async (input: ImplementationCheckInput): Promise<ImplementationCheckResult> => {
-    const content = await execCmd('gh', ['issue', 'view', input.issueNumber]);
-
     return loopLlm<ImplementationCheckResult>(PROMPT, {
-      context: content,
-      allowSkills: ['read-file', 'grep-file'],
+      context: `評価対象: Issue #${input.issueNumber}`,
+      allowSkills: ['view-issue', 'read-file', 'grep-file'],
       outputSchema: OUTPUT_SCHEMA,
       maxIterations: 30,
     });

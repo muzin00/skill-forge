@@ -13,6 +13,7 @@ const SKILLS = [
   'grep-file',
   'loop-llm',
   'implementation-check',
+  'view-issue',
 ];
 
 const rawMarkdownPlugin = {
