@@ -891,8 +891,15 @@ fn run_skill_run(engine: &Engine, raw_argv: Vec<String>) -> Result<()> {
         backend,
         timeout,
         verbose,
+        help,
         skill_flags: skill_flag_argv,
     } = parse_run_argv(raw_argv);
+
+    if help {
+        return run_help(engine, skill_source);
+    }
+
+    let skill_source = skill_source.expect("skill_source is None only when help is true");
 
     let api_key = match backend {
         Backend::Api => env::var("ANTHROPIC_API_KEY")
@@ -900,35 +907,7 @@ fn run_skill_run(engine: &Engine, raw_argv: Vec<String>) -> Result<()> {
         Backend::Claude => env::var("ANTHROPIC_API_KEY").unwrap_or_default(),
     };
 
-    let (source, schema_source, instruction_source, profile) = match skill_source {
-        SkillSource::Builtin(src, schema, instruction) => (
-            src.to_string(),
-            schema.to_string(),
-            instruction.to_string(),
-            Profile::Builtin,
-        ),
-        SkillSource::Path(skill_path) => {
-            let src = fs::read_to_string(&skill_path).with_context(|| {
-                format!("failed to read skill source: {}", skill_path.display())
-            })?;
-            let schema_path = schema_path_for(&skill_path);
-            let schema = fs::read_to_string(&schema_path).with_context(|| {
-                format!("failed to read schema source: {}", schema_path.display())
-            })?;
-            let instruction_path = instruction_path_for(&skill_path);
-            let instruction = match fs::read_to_string(&instruction_path) {
-                Ok(s) => s,
-                Err(e) if e.kind() == io::ErrorKind::NotFound => String::new(),
-                Err(e) => {
-                    return Err(anyhow::anyhow!(
-                        "failed to read instruction source: {}: {e}",
-                        instruction_path.display()
-                    ));
-                }
-            };
-            (src, schema, instruction, Profile::User)
-        }
-    };
+    let (source, schema_source, instruction_source, profile) = load_skill_sources(&skill_source)?;
 
     let component = deserialize_runtime_component(engine)?;
     let linker = build_linker(engine)?;
@@ -1088,11 +1067,12 @@ enum SkillSource {
 }
 
 struct RunArgs {
-    skill_source: SkillSource,
+    skill_source: Option<SkillSource>,
     model: String,
     backend: Backend,
     timeout: Duration,
     verbose: bool,
+    help: bool,
     skill_flags: Vec<String>,
 }
 
@@ -1103,6 +1083,7 @@ fn parse_run_argv(argv: Vec<String>) -> RunArgs {
     let mut backend_flag: Option<Backend> = None;
     let mut timeout_flag: Option<u64> = None;
     let mut verbose = false;
+    let mut help = false;
     let mut skill_flags: Vec<String> = Vec::new();
 
     let mut i = 0;
@@ -1176,8 +1157,8 @@ fn parse_run_argv(argv: Vec<String>) -> RunArgs {
                 i += 1;
             }
             "--help" | "-h" => {
-                print_run_usage();
-                std::process::exit(0);
+                help = true;
+                i += 1;
             }
             t if t == "--args" || t.starts_with("--args=") => {
                 eprintln!("Error: --args: unknown flag");
@@ -1195,17 +1176,17 @@ fn parse_run_argv(argv: Vec<String>) -> RunArgs {
             eprintln!("Error: <skill-name> and --skill are mutually exclusive");
             std::process::exit(2);
         }
-        (Some(path), None) => SkillSource::Path(path),
+        (Some(path), None) => Some(SkillSource::Path(path)),
         (None, Some(n)) => {
             if let Err(msg) = validate_skill_name(&n) {
                 eprintln!("Error: <skill-name>: {msg}");
                 std::process::exit(2);
             }
             if let Some((src, schema, instruction)) = lookup_builtin_skill(&n) {
-                SkillSource::Builtin(src, schema, instruction)
+                Some(SkillSource::Builtin(src, schema, instruction))
             } else {
                 match skill_dir_for_name(&n) {
-                    Ok(dir) => SkillSource::Path(dir.join("skill.js")),
+                    Ok(dir) => Some(SkillSource::Path(dir.join("skill.js"))),
                     Err(e) => {
                         eprintln!("Error: <skill-name>: {e}");
                         std::process::exit(2);
@@ -1214,8 +1195,11 @@ fn parse_run_argv(argv: Vec<String>) -> RunArgs {
             }
         }
         (None, None) => {
-            eprintln!("Error: <skill-name> or --skill: required");
-            std::process::exit(2);
+            if !help {
+                eprintln!("Error: <skill-name> or --skill: required");
+                std::process::exit(2);
+            }
+            None
         }
     };
 
@@ -1227,6 +1211,7 @@ fn parse_run_argv(argv: Vec<String>) -> RunArgs {
         backend: resolve_backend(backend_flag),
         timeout: resolve_timeout(timeout_flag),
         verbose,
+        help,
         skill_flags,
     }
 }
@@ -1244,6 +1229,183 @@ fn print_run_usage() {
     println!("  --timeout <secs>      Timeout in seconds");
     println!("  --verbose             Print loop-llm tool call logs to stderr (off by default)");
     println!("  -h, --help            Print this help");
+}
+
+fn load_skill_sources(
+    skill_source: &SkillSource,
+) -> Result<(String, String, String, Profile)> {
+    match skill_source {
+        SkillSource::Builtin(src, schema, instruction) => Ok((
+            (*src).to_string(),
+            (*schema).to_string(),
+            (*instruction).to_string(),
+            Profile::Builtin,
+        )),
+        SkillSource::Path(skill_path) => {
+            let src = fs::read_to_string(skill_path).with_context(|| {
+                format!("failed to read skill source: {}", skill_path.display())
+            })?;
+            let schema_path = schema_path_for(skill_path);
+            let schema = fs::read_to_string(&schema_path).with_context(|| {
+                format!("failed to read schema source: {}", schema_path.display())
+            })?;
+            let instruction_path = instruction_path_for(skill_path);
+            let instruction = match fs::read_to_string(&instruction_path) {
+                Ok(s) => s,
+                Err(e) if e.kind() == io::ErrorKind::NotFound => String::new(),
+                Err(e) => {
+                    return Err(anyhow::anyhow!(
+                        "failed to read instruction source: {}: {e}",
+                        instruction_path.display()
+                    ));
+                }
+            };
+            Ok((src, schema, instruction, Profile::User))
+        }
+    }
+}
+
+fn run_help(engine: &Engine, skill_source: Option<SkillSource>) -> Result<()> {
+    print_run_usage();
+    let Some(source) = skill_source else {
+        return Ok(());
+    };
+
+    let (skill_src, schema_src, instruction_src, _) = load_skill_sources(&source)?;
+    let envelope = match evaluate_schema_for_mcp(engine, &skill_src, &schema_src, &instruction_src) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("Error: failed to load schema: {e}");
+            std::process::exit(1);
+        }
+    };
+    let input = envelope
+        .get("input")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let args_spec = envelope.get("args");
+
+    let lines = format_skill_arguments_lines(&input, args_spec);
+    if !lines.is_empty() {
+        println!();
+        println!("Skill arguments:");
+        for line in lines {
+            println!("{line}");
+        }
+    }
+    Ok(())
+}
+
+fn format_skill_arguments_lines(
+    input_schema: &serde_json::Value,
+    args_spec: Option<&serde_json::Value>,
+) -> Vec<String> {
+    let positional_prop = args_spec
+        .and_then(|a| a.get("positional"))
+        .and_then(|p| p.as_str());
+
+    let Some(properties) = input_schema.get("properties").and_then(|p| p.as_object()) else {
+        return Vec::new();
+    };
+    if properties.is_empty() {
+        return Vec::new();
+    }
+
+    let required: Vec<&str> = input_schema
+        .get("required")
+        .and_then(|r| r.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
+        .unwrap_or_default();
+
+    struct Entry {
+        label: String,
+        markers: String,
+        description: Option<String>,
+        extras: Vec<String>,
+    }
+
+    let mut entries: Vec<Entry> = Vec::new();
+    for (name, prop) in properties {
+        let is_positional = positional_prop == Some(name.as_str());
+        let ty = prop.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        let is_required = required.iter().any(|r| r == name);
+        let req_str = if is_required { "required" } else { "optional" };
+
+        let label = if is_positional {
+            format!("<{name}>")
+        } else {
+            format!("--{} <{ty}>", validator::camel_to_kebab(name))
+        };
+
+        let markers = if is_positional {
+            format!("(positional, {ty}, {req_str})")
+        } else {
+            format!("({req_str})")
+        };
+
+        let description = prop
+            .get("description")
+            .and_then(|d| d.as_str())
+            .map(|s| s.to_string());
+
+        let mut extras: Vec<String> = Vec::new();
+        if let Some(values) = prop.get("enum").and_then(|e| e.as_array()) {
+            let formatted = values
+                .iter()
+                .map(format_help_value)
+                .collect::<Vec<_>>()
+                .join("|");
+            extras.push(format!("[enum: {formatted}]"));
+        }
+        if let Some(d) = prop.get("default") {
+            extras.push(format!("[default: {}]", format_help_value(d)));
+        }
+
+        entries.push(Entry {
+            label,
+            markers,
+            description,
+            extras,
+        });
+    }
+
+    let label_width = entries
+        .iter()
+        .map(|e| e.label.chars().count())
+        .max()
+        .unwrap_or(0);
+    let marker_width = entries
+        .iter()
+        .map(|e| e.markers.chars().count())
+        .max()
+        .unwrap_or(0);
+
+    let mut lines = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let label_pad = label_width - entry.label.chars().count();
+        let mut line = format!("  {}{}{}", entry.label, " ".repeat(label_pad + 2), entry.markers);
+        if let Some(desc) = entry.description.as_ref() {
+            let marker_pad = marker_width - entry.markers.chars().count();
+            line.push_str(&" ".repeat(marker_pad + 2));
+            line.push_str(desc);
+        }
+        for extra in &entry.extras {
+            line.push(' ');
+            line.push_str(extra);
+        }
+        lines.push(line);
+    }
+    lines
+}
+
+fn format_help_value(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::Null => "null".to_string(),
+        other => other.to_string(),
+    }
 }
 
 fn schema_path_for(skill_path: &PathBuf) -> PathBuf {
