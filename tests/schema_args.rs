@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::process::{Command, Output};
 
 fn run_fixture(name: &str, extra: &[&str]) -> Output {
-    let bin = env!("CARGO_BIN_EXE_skill-forge");
+    let bin = env!("CARGO_BIN_EXE_forge");
     let fixture =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("tests/fixtures/{name}/skill.js"));
 

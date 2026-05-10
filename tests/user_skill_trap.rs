@@ -3,7 +3,7 @@ use std::process::Command;
 
 #[test]
 fn user_skill_traps_when_calling_anthropic_messages() {
-    let bin = env!("CARGO_BIN_EXE_skill-forge");
+    let bin = env!("CARGO_BIN_EXE_forge");
     let fixture =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/anthropic-trap/skill.js");
 

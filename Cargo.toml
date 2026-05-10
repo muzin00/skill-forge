@@ -5,6 +5,10 @@ edition = "2024"
 license = "MIT"
 repository = "https://github.com/muzin00/skill-forge"
 
+[[bin]]
+name = "forge"
+path = "src/main.rs"
+
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
