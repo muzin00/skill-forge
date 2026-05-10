@@ -18,6 +18,7 @@ const SKILLS = [
   'validate-branch-name',
   'issue-checkout',
   'pr-create',
+  'pr-merge',
 ];
 
 const rawMarkdownPlugin = {
