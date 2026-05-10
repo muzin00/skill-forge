@@ -19,6 +19,7 @@ const SKILLS = [
   'issue-checkout',
   'pr-create',
   'pr-merge',
+  'read-context',
 ];
 
 const rawMarkdownPlugin = {

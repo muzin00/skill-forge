@@ -1,5 +1,6 @@
 interface ImplementationCheckInput {
   issueNumber: string;
+  context?: string;
 }
 
 interface ImplementationCheckResult {
@@ -8,7 +9,7 @@ interface ImplementationCheckResult {
 }
 
 defineTask<ImplementationCheckInput, ImplementationCheckResult>({
-  allowSkills: [],
+  allowSkills: ['read-context'],
   allowCommands: [
     'cat',
     'head',
