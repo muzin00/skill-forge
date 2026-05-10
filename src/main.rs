@@ -255,7 +255,7 @@ fn log_trace(name: &str, start: Instant) {
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "skill-forge", about = "skill-forge host")]
+#[command(name = "forge", about = "forge host")]
 struct Args {
     #[command(subcommand)]
     command: Command,
@@ -1122,7 +1122,7 @@ fn parse_run_argv(argv: Vec<String>) -> RunArgs {
 
 fn print_run_usage() {
     println!(
-        "Usage: skill-forge run [<skill-name> | --skill <path>] [OPTIONS] [-- <skill-flags>]"
+        "Usage: forge run [<skill-name> | --skill <path>] [OPTIONS] [-- <skill-flags>]"
     );
     println!();
     println!("Options:");
@@ -1641,7 +1641,7 @@ fn print_generate_summary(
         println!("wrote {}", skill_dir.join("INSTRUCTION.md").display());
     }
     println!("capabilities: {}", capabilities.join(", "));
-    println!("run with: skill-forge run {name} --model {model}");
+    println!("run with: forge run {name} --model {model}");
 }
 
 fn resolve_prompt(raw: &str) -> std::result::Result<String, (String, i32)> {
@@ -1687,7 +1687,7 @@ mod tests {
 
     #[test]
     fn mcp_server_default_mode_is_codegen() {
-        let parsed = Args::try_parse_from(["skill-forge", "mcp-server"]).unwrap();
+        let parsed = Args::try_parse_from(["forge", "mcp-server"]).unwrap();
         match parsed.command {
             Command::McpServer { mode } => assert_eq!(mode, McpMode::Codegen),
             other => panic!("expected McpServer command, got {other:?}"),
@@ -1697,7 +1697,7 @@ mod tests {
     #[test]
     fn mcp_server_accepts_explicit_codegen_mode() {
         let parsed =
-            Args::try_parse_from(["skill-forge", "mcp-server", "--mode", "codegen"]).unwrap();
+            Args::try_parse_from(["forge", "mcp-server", "--mode", "codegen"]).unwrap();
         match parsed.command {
             Command::McpServer { mode } => assert_eq!(mode, McpMode::Codegen),
             other => panic!("expected McpServer command, got {other:?}"),
@@ -1707,7 +1707,7 @@ mod tests {
     #[test]
     fn mcp_server_accepts_skills_mode() {
         let parsed =
-            Args::try_parse_from(["skill-forge", "mcp-server", "--mode", "skills"]).unwrap();
+            Args::try_parse_from(["forge", "mcp-server", "--mode", "skills"]).unwrap();
         match parsed.command {
             Command::McpServer { mode } => assert_eq!(mode, McpMode::Skills),
             other => panic!("expected McpServer command, got {other:?}"),
@@ -1716,7 +1716,7 @@ mod tests {
 
     #[test]
     fn mcp_server_rejects_unknown_mode() {
-        let err = Args::try_parse_from(["skill-forge", "mcp-server", "--mode", "bogus"])
+        let err = Args::try_parse_from(["forge", "mcp-server", "--mode", "bogus"])
             .expect_err("expected parse error");
         assert!(
             err.to_string().contains("bogus") || err.to_string().contains("invalid"),

@@ -5,7 +5,7 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const BIN: &str = env!("CARGO_BIN_EXE_skill-forge");
+const BIN: &str = env!("CARGO_BIN_EXE_forge");
 
 const ECHO_SKILL_JS: &str = "defineSkill(async (input) => input);\n";
 const ECHO_SCHEMA_JS: &str = "defineSchema({ type: 'object', additionalProperties: true, properties: { msg: { type: 'string' } } });\n";
