@@ -56,6 +56,7 @@ const SKILL_VALIDATE_BRANCH_NAME_JS: &str =
 const SKILL_ISSUE_CHECKOUT_JS: &str =
     include_str!("../agent/dist/skills/issue-checkout/skill.js");
 const SKILL_PR_CREATE_JS: &str = include_str!("../agent/dist/skills/pr-create/skill.js");
+const SKILL_PR_MERGE_JS: &str = include_str!("../agent/dist/skills/pr-merge/skill.js");
 
 const SCHEMA_CALL_LLM_JS: &str = include_str!("../agent/dist/skills/call-llm/schema.js");
 const SCHEMA_GENERATE_SKILL_CODE_JS: &str =
@@ -77,6 +78,7 @@ const SCHEMA_VALIDATE_BRANCH_NAME_JS: &str =
 const SCHEMA_ISSUE_CHECKOUT_JS: &str =
     include_str!("../agent/dist/skills/issue-checkout/schema.js");
 const SCHEMA_PR_CREATE_JS: &str = include_str!("../agent/dist/skills/pr-create/schema.js");
+const SCHEMA_PR_MERGE_JS: &str = include_str!("../agent/dist/skills/pr-merge/schema.js");
 
 const DESC_CALL_LLM: &str = include_str!("../agent/src/skills/call-llm/DESCRIPTION.md");
 const DESC_GENERATE_SKILL_CODE: &str =
@@ -98,6 +100,7 @@ const DESC_VALIDATE_BRANCH_NAME: &str =
 const DESC_ISSUE_CHECKOUT: &str =
     include_str!("../agent/src/skills/issue-checkout/DESCRIPTION.md");
 const DESC_PR_CREATE: &str = include_str!("../agent/src/skills/pr-create/DESCRIPTION.md");
+const DESC_PR_MERGE: &str = include_str!("../agent/src/skills/pr-merge/DESCRIPTION.md");
 
 const INSTRUCTION_IMPLEMENTATION_CHECK: &str =
     include_str!("../agent/src/skills/implementation-check/INSTRUCTION.md");
@@ -201,6 +204,13 @@ const BUILTIN_SKILLS: &[(&str, &str, &str, &str, &str)] = &[
         SCHEMA_PR_CREATE_JS,
         DESC_PR_CREATE,
         INSTRUCTION_PR_CREATE,
+    ),
+    (
+        "pr-merge",
+        SKILL_PR_MERGE_JS,
+        SCHEMA_PR_MERGE_JS,
+        DESC_PR_MERGE,
+        "",
     ),
 ];
 
