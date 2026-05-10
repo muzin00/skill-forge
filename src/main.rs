@@ -287,6 +287,7 @@ enum Command {
         #[arg(long, value_enum, default_value_t = McpMode::Codegen)]
         mode: McpMode,
     },
+    List,
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug, ValueEnum)]
@@ -668,7 +669,117 @@ fn main() -> Result<()> {
             run_generate(&engine, &prompt, &name, &model, force, backend, timeout)
         }
         Command::McpServer { mode } => mcp::run(mode, &engine),
+        Command::List => run_list(),
     }
+}
+
+const LIST_BULLET: &str = "• ";
+const LIST_DESC_SEP: &str = "  - ";
+const LIST_TRUNCATION_MARKER: &str = "...";
+
+fn run_list() -> Result<()> {
+    let mut entries: Vec<(String, &'static str, String)> = BUILTIN_SKILLS
+        .iter()
+        .map(|(name, _, _, desc, _)| {
+            ((*name).to_string(), "builtin", first_line(desc).to_string())
+        })
+        .collect();
+
+    for name in collect_user_skill_names()? {
+        entries.push((name, "user", String::new()));
+    }
+
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let max_label_width = entries
+        .iter()
+        .map(|(name, kind, _)| label_width(name, kind))
+        .max()
+        .unwrap_or(0);
+
+    let term_width = if io::stdout().is_terminal() {
+        terminal_size::terminal_size().map(|(terminal_size::Width(w), _)| w as usize)
+    } else {
+        None
+    };
+
+    for (name, kind, desc) in entries {
+        let label = format!("{LIST_BULLET}{name} ({kind})");
+        if desc.is_empty() {
+            println!("{label}");
+            continue;
+        }
+        let pad = max_label_width.saturating_sub(label_width(&name, kind));
+        let padding: String = " ".repeat(pad);
+        let desc_to_print = match term_width {
+            Some(width) => {
+                let prefix_chars = max_label_width + LIST_DESC_SEP.chars().count();
+                let available = width.saturating_sub(prefix_chars);
+                truncate_with_marker(&desc, available)
+            }
+            None => desc.clone(),
+        };
+        println!("{label}{padding}{LIST_DESC_SEP}{desc_to_print}");
+    }
+
+    Ok(())
+}
+
+fn label_width(name: &str, kind: &str) -> usize {
+    LIST_BULLET.chars().count() + name.chars().count() + 2 + kind.chars().count() + 1
+}
+
+fn truncate_with_marker(s: &str, max_chars: usize) -> String {
+    let count = s.chars().count();
+    if count <= max_chars {
+        return s.to_string();
+    }
+    let marker_len = LIST_TRUNCATION_MARKER.chars().count();
+    if max_chars <= marker_len {
+        return s.chars().take(max_chars).collect();
+    }
+    let mut out: String = s.chars().take(max_chars - marker_len).collect();
+    out.push_str(LIST_TRUNCATION_MARKER);
+    out
+}
+
+fn first_line(s: &str) -> &str {
+    s.lines().next().unwrap_or("").trim()
+}
+
+fn collect_user_skill_names() -> Result<Vec<String>> {
+    let home = match dirs::home_dir() {
+        Some(h) => h,
+        None => return Ok(Vec::new()),
+    };
+    let dir = home.join(".skill-forge").join("skills");
+    let read_dir = match fs::read_dir(&dir) {
+        Ok(rd) => rd,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => {
+            return Err(anyhow::Error::from(e))
+                .with_context(|| format!("failed to read user skills dir: {}", dir.display()));
+        }
+    };
+
+    let mut names = Vec::new();
+    for entry in read_dir {
+        let entry = entry
+            .with_context(|| format!("failed to read entry under {}", dir.display()))?;
+        let file_type = entry
+            .file_type()
+            .with_context(|| format!("failed to stat {}", entry.path().display()))?;
+        if !file_type.is_dir() {
+            continue;
+        }
+        if !entry.path().join("skill.js").is_file() {
+            continue;
+        }
+        if let Some(name) = entry.file_name().to_str() {
+            names.push(name.to_string());
+        }
+    }
+    Ok(names)
 }
 
 fn resolve_backend(flag: Option<Backend>) -> Backend {
