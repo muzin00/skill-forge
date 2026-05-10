@@ -1,0 +1,1 @@
+Resolve a context value to its content. If `value` starts with `@`, the rest is treated as a file path and read with `cat`; any other value is returned as a literal string. Throws if the file cannot be read or the path after `@` is empty (no fallback to literal — a typo in the path stays visible).

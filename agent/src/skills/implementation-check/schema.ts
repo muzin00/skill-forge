@@ -6,6 +6,11 @@ defineSchema(
         type: 'string',
         description: 'GitHub Issue number or URL to evaluate',
       },
+      context: {
+        type: 'string',
+        description:
+          'Optional supplemental context. Passed verbatim to the read-context skill, which interprets a leading "@" as a file path and any other value as literal text.',
+      },
     },
     required: ['issueNumber'],
     additionalProperties: false,
