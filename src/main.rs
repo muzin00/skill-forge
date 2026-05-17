@@ -1,6 +1,6 @@
 use std::env;
 use std::fs;
-use std::io::{self, IsTerminal};
+use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -494,7 +494,7 @@ impl InvokeHost for SkillState {
         )
         .map_err(|e| anyhow::anyhow!("failed to instantiate skill for invoke: {e}"))?;
         let started = Instant::now();
-        let r = runtime.call_run(&mut store, &args_json)?;
+        let r = runtime.call_run(&mut store, &args_json, None)?;
         log_trace("invoke run()", started);
         Ok(r)
     }
@@ -959,9 +959,10 @@ fn run_skill_run(engine: &Engine, raw_argv: Vec<String>) -> Result<()> {
         .map(|s| s.to_string());
 
     let args_json = build_input_args_json(&input_schema, positional_prop.as_deref(), &skill_flag_argv)?;
+    let context = read_stdin_context()?;
 
     let started = Instant::now();
-    let r = runtime.call_run(&mut store, &args_json)?;
+    let r = runtime.call_run(&mut store, &args_json, context.as_deref())?;
     log_trace(
         "run() (incl. JSON.parse + skill load + run + stringify)",
         started,
@@ -1032,6 +1033,21 @@ fn build_input_args_json(
             eprintln!("{msg}");
             std::process::exit(2);
         }
+    }
+}
+
+fn read_stdin_context() -> Result<Option<String>> {
+    if io::stdin().is_terminal() {
+        return Ok(None);
+    }
+    let mut buf = String::new();
+    io::stdin()
+        .read_to_string(&mut buf)
+        .context("failed to read stdin")?;
+    if buf.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(buf))
     }
 }
 
@@ -1453,7 +1469,7 @@ pub(crate) fn run_skill_for_mcp(
     )
     .map_err(|e| format!("instantiate failed: {e}"))?;
     let r = runtime
-        .call_run(&mut store, args_json)
+        .call_run(&mut store, args_json, None)
         .map_err(|e| format!("call_run trapped: {e}"))?;
     match r {
         Ok(j) => Ok(j),
@@ -1500,7 +1516,7 @@ fn run_builtin_skill(
         false,
     )?;
     let started = Instant::now();
-    let r = runtime.call_run(&mut store, args_json)?;
+    let r = runtime.call_run(&mut store, args_json, None)?;
     log_trace("builtin run()", started);
     Ok(r)
 }

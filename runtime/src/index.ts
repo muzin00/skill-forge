@@ -91,6 +91,7 @@ let __registered_schema__:
     }
   | undefined;
 let __registered_args__: Record<string, unknown> | undefined;
+let __runtime_context__: string | undefined;
 
 Object.defineProperty(globalThis, 'defineSkill', {
   value: function defineSkill(runFn: (input: unknown) => Promise<unknown>) {
@@ -209,9 +210,13 @@ Object.defineProperty(globalThis, 'defineTask', {
           'defineTask requires INSTRUCTION.md alongside skill.js (getInstruction() returned empty string)',
         );
       }
+      const context: string[] = [JSON.stringify(input)];
+      if (__runtime_context__ !== undefined && __runtime_context__.length > 0) {
+        context.push(__runtime_context__);
+      }
       return invokeSkill('loop-llm', {
         prompt,
-        context: JSON.stringify(input),
+        context,
         allowSkills: opts.allowSkills,
         allowCommands: opts.allowCommands,
         outputSchema: schema.output,
@@ -291,7 +296,11 @@ function rethrow(e: unknown, defaultCode: ErrorCode): never {
   };
 }
 
-export async function run(argsJson: string): Promise<string> {
+export async function run(
+  argsJson: string,
+  context?: string,
+): Promise<string> {
+  __runtime_context__ = context;
   let mod;
   try {
     mod = loadSkill();
