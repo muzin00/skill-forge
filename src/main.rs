@@ -1,6 +1,6 @@
 use std::env;
 use std::fs;
-use std::io::{self, IsTerminal, Read};
+use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -1026,33 +1026,7 @@ fn build_input_args_json(
     positional_prop: Option<&str>,
     skill_flag_argv: &[String],
 ) -> Result<String> {
-    let stdin_is_tty = io::stdin().is_terminal();
-    let result = if stdin_is_tty {
-        skill_args::build_args_json(input_schema, positional_prop, skill_flag_argv)
-    } else {
-        let mut buf = String::new();
-        io::stdin()
-            .read_to_string(&mut buf)
-            .context("failed to read stdin")?;
-        let stdin_value: serde_json::Value = if buf.trim().is_empty() {
-            serde_json::Value::Object(serde_json::Map::new())
-        } else {
-            match serde_json::from_str(&buf) {
-                Ok(v) => v,
-                Err(e) => {
-                    eprintln!("Error: stdin: invalid JSON: {e}");
-                    std::process::exit(2);
-                }
-            }
-        };
-        skill_args::build_args_json_with_stdin(
-            input_schema,
-            positional_prop,
-            skill_flag_argv,
-            &stdin_value,
-        )
-    };
-    match result {
+    match skill_args::build_args_json(input_schema, positional_prop, skill_flag_argv) {
         Ok(json) => Ok(json),
         Err(msg) => {
             eprintln!("{msg}");
