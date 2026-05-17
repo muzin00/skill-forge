@@ -20,7 +20,7 @@ const ALLOWED_PREFIXES = [
 const ISSUE_NUMBER_PATTERN = /^\d+$/;
 const SUMMARY_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
-defineSkill(
+defineTool(
   async (input: ValidateBranchNameInput): Promise<ValidateBranchNameOutput> => {
     const errors: string[] = [];
     const segments = input.branchName.split('/');

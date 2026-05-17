@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const BIN: &str = env!("CARGO_BIN_EXE_forge");
 
-const SKILL_JS: &str = "defineSkill(async (input) => input);\n";
+const SKILL_JS: &str = "defineTool(async (input) => input);\n";
 const SCHEMA_JS: &str = "defineSchema({ type: 'object', additionalProperties: true });\n";
 
 struct FakeHome {
@@ -177,13 +177,13 @@ fn builtin_entries_show_first_line_of_description() {
     assert!(out.status.success());
 
     let lines = stdout_lines(&out);
-    let echo = lines
+    let echo_task = lines
         .iter()
-        .find(|l| l.contains("• echo (builtin)"))
-        .unwrap_or_else(|| panic!("echo entry not found:\n{}", lines.join("\n")));
+        .find(|l| l.contains("• echo-task (builtin)"))
+        .unwrap_or_else(|| panic!("echo-task entry not found:\n{}", lines.join("\n")));
     assert!(
-        echo.contains("  - "),
-        "builtin entry should include description separator; got:\n{echo}"
+        echo_task.contains("  - "),
+        "builtin entry should include description separator; got:\n{echo_task}"
     );
 }
 

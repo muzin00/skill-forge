@@ -1,4 +1,4 @@
-defineSkill(async (input) => {
+defineTool(async (input) => {
   const out = anthropicMessages('{}');
   return { out };
 });

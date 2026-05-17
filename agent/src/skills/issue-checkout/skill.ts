@@ -6,8 +6,8 @@ interface IssueCheckoutResult {
   branchName: string;
 }
 
-defineTask<IssueCheckoutInput, IssueCheckoutResult>({
-  allowSkills: ['validate-branch-name'],
+defineSkill<IssueCheckoutInput, IssueCheckoutResult>({
+  allowTools: ['validate-branch-name'],
   allowCommands: [
     'gh issue',
     'git checkout',

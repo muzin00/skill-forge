@@ -1,4 +1,4 @@
-declare function defineSkill<TInput, TOutput>(
+declare function defineTool<TInput, TOutput>(
   run: (input: TInput) => Promise<TOutput>,
 ): void;
 
@@ -9,8 +9,8 @@ declare function defineSchema(
 
 declare function defineArgs(args: { positional?: string }): void;
 
-declare function defineTask<TInput, TOutput>(opts: {
-  allowSkills: string[];
+declare function defineSkill<TInput, TOutput>(opts: {
+  allowTools: string[];
   allowCommands?: string[];
   maxIterations?: number;
 }): void;

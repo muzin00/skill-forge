@@ -33,18 +33,18 @@ fn skill_without_define_skill_call_reports_specific_error() {
     let out = run_fixture("define-skill-not-called");
     assert_stderr_contains(
         &out,
-        "skill must call defineSkill(async (input) => { ... }) at top level",
+        "entry must call defineTool(async (input) => { ... }) or defineSkill({ ... }) at top level",
     );
 }
 
 #[test]
 fn define_skill_with_non_function_reports_specific_error() {
     let out = run_fixture("define-skill-not-a-function");
-    assert_stderr_contains(&out, "defineSkill argument must be a function");
+    assert_stderr_contains(&out, "defineTool argument must be a function");
 }
 
 #[test]
 fn define_skill_called_twice_reports_specific_error() {
     let out = run_fixture("define-skill-called-twice");
-    assert_stderr_contains(&out, "defineSkill called more than once");
+    assert_stderr_contains(&out, "defineTool called more than once");
 }

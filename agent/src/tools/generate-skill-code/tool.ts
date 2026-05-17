@@ -5,6 +5,6 @@ interface GenerateSkillCodeInput {
   model: string;
 }
 
-defineSkill(async (input: GenerateSkillCodeInput): Promise<Generated> => {
+defineTool(async (input: GenerateSkillCodeInput): Promise<Generated> => {
   return generateSkillCode(input.prompt, input.model);
 });

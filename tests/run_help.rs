@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const BIN: &str = env!("CARGO_BIN_EXE_forge");
 
-const SKILL_JS: &str = "defineSkill(async (input) => input);\n";
+const SKILL_JS: &str = "defineTool(async (input) => input);\n";
 
 struct FakeHome {
     path: PathBuf,

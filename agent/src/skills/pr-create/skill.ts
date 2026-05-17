@@ -6,8 +6,8 @@ interface PrCreateResult {
   prUrl: string;
 }
 
-defineTask<PrCreateInput, PrCreateResult>({
-  allowSkills: [],
+defineSkill<PrCreateInput, PrCreateResult>({
+  allowTools: [],
   allowCommands: [
     'git rev-parse',
     'git log',

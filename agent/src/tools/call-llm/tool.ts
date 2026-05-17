@@ -6,7 +6,7 @@ interface CallLlmInput {
   model: string;
 }
 
-defineSkill(async (input: CallLlmInput): Promise<{ output: string }> => {
+defineTool(async (input: CallLlmInput): Promise<{ output: string }> => {
   const { prompt, model } = input;
   const inputJson = JSON.stringify(input.input ?? {});
 

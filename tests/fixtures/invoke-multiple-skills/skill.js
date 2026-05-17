@@ -1,4 +1,4 @@
-defineSkill(async () => {
+defineTool(async () => {
   let caught = null;
   try {
     await invokeSkill('error', { message: 'boom' });

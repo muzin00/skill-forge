@@ -93,16 +93,16 @@ let __registered_schema__:
 let __registered_args__: Record<string, unknown> | undefined;
 let __runtime_context__: string | undefined;
 
-Object.defineProperty(globalThis, 'defineSkill', {
-  value: function defineSkill(runFn: (input: unknown) => Promise<unknown>) {
+Object.defineProperty(globalThis, 'defineTool', {
+  value: function defineTool(runFn: (input: unknown) => Promise<unknown>) {
     if (typeof runFn !== 'function') {
       throw skillError(
         'runtime-error',
-        `defineSkill argument must be a function, got ${runFn === null ? 'null' : typeof runFn}`,
+        `defineTool argument must be a function, got ${runFn === null ? 'null' : typeof runFn}`,
       );
     }
     if (__registered__ !== undefined) {
-      throw skillError('runtime-error', 'defineSkill called more than once');
+      throw skillError('runtime-error', 'defineTool called more than once');
     }
     __registered__ = runFn;
   },
@@ -187,27 +187,27 @@ Object.defineProperty(globalThis, 'defineSchema', {
   configurable: false,
 });
 
-const DEFAULT_TASK_MAX_ITERATIONS = 15;
+const DEFAULT_SKILL_MAX_ITERATIONS = 15;
 
-Object.defineProperty(globalThis, 'defineTask', {
-  value: function defineTask(opts: {
-    allowSkills: string[];
+Object.defineProperty(globalThis, 'defineSkill', {
+  value: function defineSkill(opts: {
+    allowTools: string[];
     allowCommands?: string[];
     maxIterations?: number;
   }) {
-    defineSkill(async (input: unknown): Promise<unknown> => {
+    defineTool(async (input: unknown): Promise<unknown> => {
       const schema = getRegisteredSchema();
       if (!schema || !schema.output) {
         throw skillError(
           'runtime-error',
-          'defineTask requires defineSchema to be called with both inputSchema and outputSchema',
+          'defineSkill requires defineSchema to be called with both inputSchema and outputSchema',
         );
       }
       const prompt = getInstruction();
       if (!prompt) {
         throw skillError(
           'runtime-error',
-          'defineTask requires INSTRUCTION.md alongside skill.js (getInstruction() returned empty string)',
+          'defineSkill requires INSTRUCTION.md alongside skill.js (getInstruction() returned empty string)',
         );
       }
       const context: string[] = [JSON.stringify(input)];
@@ -217,10 +217,10 @@ Object.defineProperty(globalThis, 'defineTask', {
       return invokeSkill('loop-llm', {
         prompt,
         context,
-        allowSkills: opts.allowSkills,
+        allowTools: opts.allowTools,
         allowCommands: opts.allowCommands,
         outputSchema: schema.output,
-        maxIterations: opts.maxIterations ?? DEFAULT_TASK_MAX_ITERATIONS,
+        maxIterations: opts.maxIterations ?? DEFAULT_SKILL_MAX_ITERATIONS,
       });
     });
   },
@@ -245,7 +245,7 @@ function loadSkill() {
   if (typeof __registered__ !== 'function') {
     throw skillError(
       'runtime-error',
-      'skill must call defineSkill(async (input) => { ... }) at top level',
+      'entry must call defineTool(async (input) => { ... }) or defineSkill({ ... }) at top level',
     );
   }
 
@@ -311,7 +311,7 @@ export async function run(
   if (typeof mod.run !== 'function') {
     throw {
       code: 'runtime-error' as ErrorCode,
-      message: 'skill did not register a run function via defineSkill',
+      message: 'entry did not register a run function via defineTool or defineSkill',
       stack: undefined,
     };
   }

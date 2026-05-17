@@ -1,10 +1,10 @@
 import { loopLlm, type LoopLlmOpts } from '../../lib/loopLlm.js';
 
-interface LoopLlmSkillInput extends LoopLlmOpts {
+interface LoopLlmToolInput extends LoopLlmOpts {
   prompt: string;
 }
 
-defineSkill(async (input: LoopLlmSkillInput): Promise<unknown> => {
+defineTool(async (input: LoopLlmToolInput): Promise<unknown> => {
   const { prompt, ...opts } = input;
   return loopLlm(prompt, opts);
 });

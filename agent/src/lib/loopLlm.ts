@@ -16,7 +16,7 @@ const LOG_RESULT_MAX = 300;
 
 export interface LoopLlmOpts {
   context: string[];
-  allowSkills: string[];
+  allowTools: string[];
   allowCommands?: string[];
   outputSchema: Record<string, unknown>;
   model?: string;
@@ -50,8 +50,8 @@ export async function loopLlm<TOutput = Record<string, unknown>>(
   const maxIterations = opts.maxIterations ?? DEFAULT_MAX_ITERATIONS;
 
   const commandSpecs = parseAllowCommands(opts.allowCommands ?? []);
-  const registry = buildRegistry(opts.allowSkills, commandSpecs);
-  const tools = buildTools(opts.allowSkills, commandSpecs, opts.outputSchema);
+  const registry = buildRegistry(opts.allowTools, commandSpecs);
+  const tools = buildTools(opts.allowTools, commandSpecs, opts.outputSchema);
 
   if (opts.context.length === 0) {
     throw 'loop-llm: context must contain at least one entry';
@@ -136,19 +136,19 @@ function parseAllowCommands(entries: string[]): CommandSpec[] {
 }
 
 function buildRegistry(
-  allowSkills: string[],
+  allowTools: string[],
   commandSpecs: CommandSpec[],
 ): Map<string, ToolKind> {
   const registry = new Map<string, ToolKind>();
-  for (const name of allowSkills) {
+  for (const name of allowTools) {
     if (registry.has(name)) {
-      throw `loop-llm: allowSkills has duplicate name "${name}"`;
+      throw `loop-llm: allowTools has duplicate name "${name}"`;
     }
     registry.set(name, { kind: 'skill' });
   }
   for (const spec of commandSpecs) {
     if (registry.has(spec.toolName)) {
-      throw `loop-llm: tool name "${spec.toolName}" (from allowCommands entry "${spec.entry}") collides with an allowSkills entry`;
+      throw `loop-llm: tool name "${spec.toolName}" (from allowCommands entry "${spec.entry}") collides with an allowTools entry`;
     }
     registry.set(spec.toolName, {
       kind: 'command',
@@ -160,12 +160,12 @@ function buildRegistry(
 }
 
 function buildTools(
-  allowSkills: string[],
+  allowTools: string[],
   commandSpecs: CommandSpec[],
   outputSchema: Record<string, unknown>,
 ): ToolDefinition[] {
   const tools: ToolDefinition[] = [];
-  for (const name of allowSkills) {
+  for (const name of allowTools) {
     tools.push({
       name,
       description: getSkillDescription(name),
