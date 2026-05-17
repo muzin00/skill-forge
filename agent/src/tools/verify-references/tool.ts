@@ -179,7 +179,7 @@ const FINDINGS_TOOLS: ToolDefinition[] = [
   },
 ];
 
-defineSkill(
+defineTool(
   async (input: VerifyReferencesInput): Promise<VerifyReferencesOutput> => {
     const repoRoot = input.repoRoot;
     const allowedKinds: RefKind[] = input.kinds ?? ['file', 'symbol', 'line-range'];

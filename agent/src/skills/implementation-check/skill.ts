@@ -8,8 +8,8 @@ interface ImplementationCheckResult {
   implementable: boolean;
 }
 
-defineTask<ImplementationCheckInput, ImplementationCheckResult>({
-  allowSkills: ['read-context'],
+defineSkill<ImplementationCheckInput, ImplementationCheckResult>({
+  allowTools: ['read-context'],
   allowCommands: [
     'cat',
     'head',

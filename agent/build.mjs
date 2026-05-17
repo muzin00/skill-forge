@@ -2,7 +2,7 @@ import { build } from 'rolldown';
 import { mkdir, readFile } from 'node:fs/promises';
 import { resolve, dirname } from 'node:path';
 
-const SKILLS = [
+const TOOLS = [
   'call-llm',
   'generate-skill-code',
   'echo',
@@ -12,14 +12,17 @@ const SKILLS = [
   'read-file',
   'grep-file',
   'loop-llm',
-  'implementation-check',
   'view-issue',
-  'echo-task',
   'validate-branch-name',
-  'issue-checkout',
-  'pr-create',
   'pr-merge',
   'read-context',
+];
+
+const SKILLS = [
+  'echo-task',
+  'implementation-check',
+  'issue-checkout',
+  'pr-create',
 ];
 
 const rawMarkdownPlugin = {
@@ -36,16 +39,24 @@ const rawMarkdownPlugin = {
   },
 };
 
-for (const name of SKILLS) {
-  await mkdir(`dist/skills/${name}`, { recursive: true });
-  for (const part of ['skill', 'schema']) {
+async function buildEntry(srcDir, distDir, entryName) {
+  await mkdir(distDir, { recursive: true });
+  for (const part of [entryName, 'schema']) {
     await build({
-      input: `src/skills/${name}/${part}.ts`,
+      input: `${srcDir}/${part}.ts`,
       output: {
-        file: `dist/skills/${name}/${part}.js`,
+        file: `${distDir}/${part}.js`,
         format: 'esm',
       },
       plugins: [rawMarkdownPlugin],
     });
   }
+}
+
+for (const name of TOOLS) {
+  await buildEntry(`src/tools/${name}`, `dist/tools/${name}`, 'tool');
+}
+
+for (const name of SKILLS) {
+  await buildEntry(`src/skills/${name}`, `dist/skills/${name}`, 'skill');
 }

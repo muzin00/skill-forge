@@ -7,11 +7,11 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const BIN: &str = env!("CARGO_BIN_EXE_forge");
 
-const ECHO_SKILL_JS: &str = "defineSkill(async (input) => input);\n";
+const ECHO_SKILL_JS: &str = "defineTool(async (input) => input);\n";
 const ECHO_SCHEMA_JS: &str = "defineSchema({ type: 'object', additionalProperties: true, properties: { msg: { type: 'string' } } });\n";
 const ECHO_DESCRIPTION_MD: &str = "Echo input back as JSON. Use to verify MCP tool wiring.\n";
 
-const NOOP_SKILL_JS: &str = "defineSkill(async () => ({}));\n";
+const NOOP_SKILL_JS: &str = "defineTool(async () => ({}));\n";
 const NOOP_SCHEMA_JS: &str = "defineSchema({ type: 'object' });\n";
 
 struct FakeHome {

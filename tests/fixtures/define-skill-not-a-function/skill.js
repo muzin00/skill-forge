@@ -1,1 +1,1 @@
-defineSkill(123);
+defineTool(123);

@@ -12,10 +12,10 @@ defineSchema({
       description:
         'User message: array of text blocks, each becomes a separate text content block in a single user message',
     },
-    allowSkills: {
+    allowTools: {
       type: 'array',
       items: { type: 'string' },
-      description: 'Names of skills the LLM can call as tools',
+      description: 'Names of registered tools / skills the LLM can call as tools',
     },
     allowCommands: {
       type: 'array',
@@ -39,6 +39,6 @@ defineSchema({
       description: 'Max loop iterations (optional, default 15)',
     },
   },
-  required: ['prompt', 'context', 'allowSkills', 'outputSchema'],
+  required: ['prompt', 'context', 'allowTools', 'outputSchema'],
   additionalProperties: false,
 });

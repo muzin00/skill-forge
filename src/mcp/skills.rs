@@ -208,7 +208,7 @@ mod tests {
         ));
         let dir = tmp.join("missing-desc");
         fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("skill.js"), "defineSkill(async () => ({}));\n").unwrap();
+        fs::write(dir.join("skill.js"), "defineTool(async () => ({}));\n").unwrap();
         fs::write(dir.join("schema.js"), "defineSchema({ type: 'object' });\n").unwrap();
         // intentionally no DESCRIPTION.md
 

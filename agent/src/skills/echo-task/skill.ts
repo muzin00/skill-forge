@@ -13,8 +13,8 @@ interface EchoTaskOutput {
   message: string;
 }
 
-defineTask<EchoTaskInput, EchoTaskOutput>({
+defineSkill<EchoTaskInput, EchoTaskOutput>({
   prompt: PROMPT,
-  allowSkills: ['echo'],
+  allowTools: ['echo'],
   maxIterations: 3,
 });

@@ -34,7 +34,7 @@ fn stdin_does_not_affect_define_skill_output() {
         .stdin
         .as_mut()
         .expect("stdin piped")
-        .write_all(b"this stdin content should be ignored by defineSkill")
+        .write_all(b"this stdin content should be ignored by defineTool")
         .expect("write stdin");
     drop(child.stdin.take());
 

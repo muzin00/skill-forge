@@ -36,77 +36,82 @@ const RUNTIME_CWASM: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/skill-run
 
 #[allow(dead_code)]
 const CODEGEN_SYSTEM_PROMPT: &str = include_str!("../agent/src/lib/SYSTEM_PROMPT.md");
-const SKILL_CALL_LLM_JS: &str = include_str!("../agent/dist/skills/call-llm/skill.js");
-const SKILL_GENERATE_SKILL_CODE_JS: &str =
-    include_str!("../agent/dist/skills/generate-skill-code/skill.js");
-const SKILL_ECHO_JS: &str = include_str!("../agent/dist/skills/echo/skill.js");
-const SKILL_ERROR_JS: &str = include_str!("../agent/dist/skills/error/skill.js");
-const SKILL_COMPOSE_JS: &str = include_str!("../agent/dist/skills/compose/skill.js");
-const SKILL_VERIFY_REFERENCES_JS: &str =
-    include_str!("../agent/dist/skills/verify-references/skill.js");
-const SKILL_READ_FILE_JS: &str = include_str!("../agent/dist/skills/read-file/skill.js");
-const SKILL_GREP_FILE_JS: &str = include_str!("../agent/dist/skills/grep-file/skill.js");
-const SKILL_LOOP_LLM_JS: &str = include_str!("../agent/dist/skills/loop-llm/skill.js");
+
+// Tool sources (decisional JS run functions).
+const TOOL_CALL_LLM_JS: &str = include_str!("../agent/dist/tools/call-llm/tool.js");
+const TOOL_GENERATE_SKILL_CODE_JS: &str =
+    include_str!("../agent/dist/tools/generate-skill-code/tool.js");
+const TOOL_ECHO_JS: &str = include_str!("../agent/dist/tools/echo/tool.js");
+const TOOL_ERROR_JS: &str = include_str!("../agent/dist/tools/error/tool.js");
+const TOOL_COMPOSE_JS: &str = include_str!("../agent/dist/tools/compose/tool.js");
+const TOOL_VERIFY_REFERENCES_JS: &str =
+    include_str!("../agent/dist/tools/verify-references/tool.js");
+const TOOL_READ_FILE_JS: &str = include_str!("../agent/dist/tools/read-file/tool.js");
+const TOOL_GREP_FILE_JS: &str = include_str!("../agent/dist/tools/grep-file/tool.js");
+const TOOL_LOOP_LLM_JS: &str = include_str!("../agent/dist/tools/loop-llm/tool.js");
+const TOOL_VIEW_ISSUE_JS: &str = include_str!("../agent/dist/tools/view-issue/tool.js");
+const TOOL_VALIDATE_BRANCH_NAME_JS: &str =
+    include_str!("../agent/dist/tools/validate-branch-name/tool.js");
+const TOOL_PR_MERGE_JS: &str = include_str!("../agent/dist/tools/pr-merge/tool.js");
+const TOOL_READ_CONTEXT_JS: &str = include_str!("../agent/dist/tools/read-context/tool.js");
+
+const SCHEMA_TOOL_CALL_LLM_JS: &str = include_str!("../agent/dist/tools/call-llm/schema.js");
+const SCHEMA_TOOL_GENERATE_SKILL_CODE_JS: &str =
+    include_str!("../agent/dist/tools/generate-skill-code/schema.js");
+const SCHEMA_TOOL_ECHO_JS: &str = include_str!("../agent/dist/tools/echo/schema.js");
+const SCHEMA_TOOL_ERROR_JS: &str = include_str!("../agent/dist/tools/error/schema.js");
+const SCHEMA_TOOL_COMPOSE_JS: &str = include_str!("../agent/dist/tools/compose/schema.js");
+const SCHEMA_TOOL_VERIFY_REFERENCES_JS: &str =
+    include_str!("../agent/dist/tools/verify-references/schema.js");
+const SCHEMA_TOOL_READ_FILE_JS: &str = include_str!("../agent/dist/tools/read-file/schema.js");
+const SCHEMA_TOOL_GREP_FILE_JS: &str = include_str!("../agent/dist/tools/grep-file/schema.js");
+const SCHEMA_TOOL_LOOP_LLM_JS: &str = include_str!("../agent/dist/tools/loop-llm/schema.js");
+const SCHEMA_TOOL_VIEW_ISSUE_JS: &str = include_str!("../agent/dist/tools/view-issue/schema.js");
+const SCHEMA_TOOL_VALIDATE_BRANCH_NAME_JS: &str =
+    include_str!("../agent/dist/tools/validate-branch-name/schema.js");
+const SCHEMA_TOOL_PR_MERGE_JS: &str = include_str!("../agent/dist/tools/pr-merge/schema.js");
+const SCHEMA_TOOL_READ_CONTEXT_JS: &str =
+    include_str!("../agent/dist/tools/read-context/schema.js");
+
+const DESC_TOOL_CALL_LLM: &str = include_str!("../agent/src/tools/call-llm/DESCRIPTION.md");
+const DESC_TOOL_GENERATE_SKILL_CODE: &str =
+    include_str!("../agent/src/tools/generate-skill-code/DESCRIPTION.md");
+const DESC_TOOL_ECHO: &str = include_str!("../agent/src/tools/echo/DESCRIPTION.md");
+const DESC_TOOL_ERROR: &str = include_str!("../agent/src/tools/error/DESCRIPTION.md");
+const DESC_TOOL_COMPOSE: &str = include_str!("../agent/src/tools/compose/DESCRIPTION.md");
+const DESC_TOOL_VERIFY_REFERENCES: &str =
+    include_str!("../agent/src/tools/verify-references/DESCRIPTION.md");
+const DESC_TOOL_READ_FILE: &str = include_str!("../agent/src/tools/read-file/DESCRIPTION.md");
+const DESC_TOOL_GREP_FILE: &str = include_str!("../agent/src/tools/grep-file/DESCRIPTION.md");
+const DESC_TOOL_LOOP_LLM: &str = include_str!("../agent/src/tools/loop-llm/DESCRIPTION.md");
+const DESC_TOOL_VIEW_ISSUE: &str = include_str!("../agent/src/tools/view-issue/DESCRIPTION.md");
+const DESC_TOOL_VALIDATE_BRANCH_NAME: &str =
+    include_str!("../agent/src/tools/validate-branch-name/DESCRIPTION.md");
+const DESC_TOOL_PR_MERGE: &str = include_str!("../agent/src/tools/pr-merge/DESCRIPTION.md");
+const DESC_TOOL_READ_CONTEXT: &str =
+    include_str!("../agent/src/tools/read-context/DESCRIPTION.md");
+
+// Skill sources (LLM-loop entries).
 const SKILL_IMPLEMENTATION_CHECK_JS: &str =
     include_str!("../agent/dist/skills/implementation-check/skill.js");
-const SKILL_VIEW_ISSUE_JS: &str = include_str!("../agent/dist/skills/view-issue/skill.js");
 const SKILL_ECHO_TASK_JS: &str = include_str!("../agent/dist/skills/echo-task/skill.js");
-const SKILL_VALIDATE_BRANCH_NAME_JS: &str =
-    include_str!("../agent/dist/skills/validate-branch-name/skill.js");
 const SKILL_ISSUE_CHECKOUT_JS: &str =
     include_str!("../agent/dist/skills/issue-checkout/skill.js");
 const SKILL_PR_CREATE_JS: &str = include_str!("../agent/dist/skills/pr-create/skill.js");
-const SKILL_PR_MERGE_JS: &str = include_str!("../agent/dist/skills/pr-merge/skill.js");
-const SKILL_READ_CONTEXT_JS: &str =
-    include_str!("../agent/dist/skills/read-context/skill.js");
 
-const SCHEMA_CALL_LLM_JS: &str = include_str!("../agent/dist/skills/call-llm/schema.js");
-const SCHEMA_GENERATE_SKILL_CODE_JS: &str =
-    include_str!("../agent/dist/skills/generate-skill-code/schema.js");
-const SCHEMA_ECHO_JS: &str = include_str!("../agent/dist/skills/echo/schema.js");
-const SCHEMA_ERROR_JS: &str = include_str!("../agent/dist/skills/error/schema.js");
-const SCHEMA_COMPOSE_JS: &str = include_str!("../agent/dist/skills/compose/schema.js");
-const SCHEMA_VERIFY_REFERENCES_JS: &str =
-    include_str!("../agent/dist/skills/verify-references/schema.js");
-const SCHEMA_READ_FILE_JS: &str = include_str!("../agent/dist/skills/read-file/schema.js");
-const SCHEMA_GREP_FILE_JS: &str = include_str!("../agent/dist/skills/grep-file/schema.js");
-const SCHEMA_LOOP_LLM_JS: &str = include_str!("../agent/dist/skills/loop-llm/schema.js");
-const SCHEMA_IMPLEMENTATION_CHECK_JS: &str =
+const SCHEMA_SKILL_IMPLEMENTATION_CHECK_JS: &str =
     include_str!("../agent/dist/skills/implementation-check/schema.js");
-const SCHEMA_VIEW_ISSUE_JS: &str = include_str!("../agent/dist/skills/view-issue/schema.js");
-const SCHEMA_ECHO_TASK_JS: &str = include_str!("../agent/dist/skills/echo-task/schema.js");
-const SCHEMA_VALIDATE_BRANCH_NAME_JS: &str =
-    include_str!("../agent/dist/skills/validate-branch-name/schema.js");
-const SCHEMA_ISSUE_CHECKOUT_JS: &str =
+const SCHEMA_SKILL_ECHO_TASK_JS: &str = include_str!("../agent/dist/skills/echo-task/schema.js");
+const SCHEMA_SKILL_ISSUE_CHECKOUT_JS: &str =
     include_str!("../agent/dist/skills/issue-checkout/schema.js");
-const SCHEMA_PR_CREATE_JS: &str = include_str!("../agent/dist/skills/pr-create/schema.js");
-const SCHEMA_PR_MERGE_JS: &str = include_str!("../agent/dist/skills/pr-merge/schema.js");
-const SCHEMA_READ_CONTEXT_JS: &str =
-    include_str!("../agent/dist/skills/read-context/schema.js");
+const SCHEMA_SKILL_PR_CREATE_JS: &str = include_str!("../agent/dist/skills/pr-create/schema.js");
 
-const DESC_CALL_LLM: &str = include_str!("../agent/src/skills/call-llm/DESCRIPTION.md");
-const DESC_GENERATE_SKILL_CODE: &str =
-    include_str!("../agent/src/skills/generate-skill-code/DESCRIPTION.md");
-const DESC_ECHO: &str = include_str!("../agent/src/skills/echo/DESCRIPTION.md");
-const DESC_ERROR: &str = include_str!("../agent/src/skills/error/DESCRIPTION.md");
-const DESC_COMPOSE: &str = include_str!("../agent/src/skills/compose/DESCRIPTION.md");
-const DESC_VERIFY_REFERENCES: &str =
-    include_str!("../agent/src/skills/verify-references/DESCRIPTION.md");
-const DESC_READ_FILE: &str = include_str!("../agent/src/skills/read-file/DESCRIPTION.md");
-const DESC_GREP_FILE: &str = include_str!("../agent/src/skills/grep-file/DESCRIPTION.md");
-const DESC_LOOP_LLM: &str = include_str!("../agent/src/skills/loop-llm/DESCRIPTION.md");
-const DESC_IMPLEMENTATION_CHECK: &str =
+const DESC_SKILL_IMPLEMENTATION_CHECK: &str =
     include_str!("../agent/src/skills/implementation-check/DESCRIPTION.md");
-const DESC_VIEW_ISSUE: &str = include_str!("../agent/src/skills/view-issue/DESCRIPTION.md");
-const DESC_ECHO_TASK: &str = include_str!("../agent/src/skills/echo-task/DESCRIPTION.md");
-const DESC_VALIDATE_BRANCH_NAME: &str =
-    include_str!("../agent/src/skills/validate-branch-name/DESCRIPTION.md");
-const DESC_ISSUE_CHECKOUT: &str =
+const DESC_SKILL_ECHO_TASK: &str = include_str!("../agent/src/skills/echo-task/DESCRIPTION.md");
+const DESC_SKILL_ISSUE_CHECKOUT: &str =
     include_str!("../agent/src/skills/issue-checkout/DESCRIPTION.md");
-const DESC_PR_CREATE: &str = include_str!("../agent/src/skills/pr-create/DESCRIPTION.md");
-const DESC_PR_MERGE: &str = include_str!("../agent/src/skills/pr-merge/DESCRIPTION.md");
-const DESC_READ_CONTEXT: &str =
-    include_str!("../agent/src/skills/read-context/DESCRIPTION.md");
+const DESC_SKILL_PR_CREATE: &str = include_str!("../agent/src/skills/pr-create/DESCRIPTION.md");
 
 const INSTRUCTION_IMPLEMENTATION_CHECK: &str =
     include_str!("../agent/src/skills/implementation-check/INSTRUCTION.md");
@@ -117,115 +122,131 @@ const INSTRUCTION_PR_CREATE: &str =
 
 const MAX_INVOKE_DEPTH: usize = 8;
 
-const BUILTIN_SKILLS: &[(&str, &str, &str, &str, &str)] = &[
+const BUILTIN_TOOLS: &[(&str, &str, &str, &str, &str)] = &[
     (
         "call-llm",
-        SKILL_CALL_LLM_JS,
-        SCHEMA_CALL_LLM_JS,
-        DESC_CALL_LLM,
+        TOOL_CALL_LLM_JS,
+        SCHEMA_TOOL_CALL_LLM_JS,
+        DESC_TOOL_CALL_LLM,
         "",
     ),
     (
         "generate-skill-code",
-        SKILL_GENERATE_SKILL_CODE_JS,
-        SCHEMA_GENERATE_SKILL_CODE_JS,
-        DESC_GENERATE_SKILL_CODE,
+        TOOL_GENERATE_SKILL_CODE_JS,
+        SCHEMA_TOOL_GENERATE_SKILL_CODE_JS,
+        DESC_TOOL_GENERATE_SKILL_CODE,
         "",
     ),
-    ("echo", SKILL_ECHO_JS, SCHEMA_ECHO_JS, DESC_ECHO, ""),
-    ("error", SKILL_ERROR_JS, SCHEMA_ERROR_JS, DESC_ERROR, ""),
+    ("echo", TOOL_ECHO_JS, SCHEMA_TOOL_ECHO_JS, DESC_TOOL_ECHO, ""),
+    (
+        "error",
+        TOOL_ERROR_JS,
+        SCHEMA_TOOL_ERROR_JS,
+        DESC_TOOL_ERROR,
+        "",
+    ),
     (
         "compose",
-        SKILL_COMPOSE_JS,
-        SCHEMA_COMPOSE_JS,
-        DESC_COMPOSE,
+        TOOL_COMPOSE_JS,
+        SCHEMA_TOOL_COMPOSE_JS,
+        DESC_TOOL_COMPOSE,
         "",
     ),
     (
         "verify-references",
-        SKILL_VERIFY_REFERENCES_JS,
-        SCHEMA_VERIFY_REFERENCES_JS,
-        DESC_VERIFY_REFERENCES,
+        TOOL_VERIFY_REFERENCES_JS,
+        SCHEMA_TOOL_VERIFY_REFERENCES_JS,
+        DESC_TOOL_VERIFY_REFERENCES,
         "",
     ),
     (
         "read-file",
-        SKILL_READ_FILE_JS,
-        SCHEMA_READ_FILE_JS,
-        DESC_READ_FILE,
+        TOOL_READ_FILE_JS,
+        SCHEMA_TOOL_READ_FILE_JS,
+        DESC_TOOL_READ_FILE,
         "",
     ),
     (
         "grep-file",
-        SKILL_GREP_FILE_JS,
-        SCHEMA_GREP_FILE_JS,
-        DESC_GREP_FILE,
+        TOOL_GREP_FILE_JS,
+        SCHEMA_TOOL_GREP_FILE_JS,
+        DESC_TOOL_GREP_FILE,
         "",
     ),
     (
         "loop-llm",
-        SKILL_LOOP_LLM_JS,
-        SCHEMA_LOOP_LLM_JS,
-        DESC_LOOP_LLM,
+        TOOL_LOOP_LLM_JS,
+        SCHEMA_TOOL_LOOP_LLM_JS,
+        DESC_TOOL_LOOP_LLM,
         "",
-    ),
-    (
-        "implementation-check",
-        SKILL_IMPLEMENTATION_CHECK_JS,
-        SCHEMA_IMPLEMENTATION_CHECK_JS,
-        DESC_IMPLEMENTATION_CHECK,
-        INSTRUCTION_IMPLEMENTATION_CHECK,
     ),
     (
         "view-issue",
-        SKILL_VIEW_ISSUE_JS,
-        SCHEMA_VIEW_ISSUE_JS,
-        DESC_VIEW_ISSUE,
-        "",
-    ),
-    (
-        "echo-task",
-        SKILL_ECHO_TASK_JS,
-        SCHEMA_ECHO_TASK_JS,
-        DESC_ECHO_TASK,
+        TOOL_VIEW_ISSUE_JS,
+        SCHEMA_TOOL_VIEW_ISSUE_JS,
+        DESC_TOOL_VIEW_ISSUE,
         "",
     ),
     (
         "validate-branch-name",
-        SKILL_VALIDATE_BRANCH_NAME_JS,
-        SCHEMA_VALIDATE_BRANCH_NAME_JS,
-        DESC_VALIDATE_BRANCH_NAME,
+        TOOL_VALIDATE_BRANCH_NAME_JS,
+        SCHEMA_TOOL_VALIDATE_BRANCH_NAME_JS,
+        DESC_TOOL_VALIDATE_BRANCH_NAME,
+        "",
+    ),
+    (
+        "pr-merge",
+        TOOL_PR_MERGE_JS,
+        SCHEMA_TOOL_PR_MERGE_JS,
+        DESC_TOOL_PR_MERGE,
+        "",
+    ),
+    (
+        "read-context",
+        TOOL_READ_CONTEXT_JS,
+        SCHEMA_TOOL_READ_CONTEXT_JS,
+        DESC_TOOL_READ_CONTEXT,
+        "",
+    ),
+];
+
+const BUILTIN_SKILLS: &[(&str, &str, &str, &str, &str)] = &[
+    (
+        "implementation-check",
+        SKILL_IMPLEMENTATION_CHECK_JS,
+        SCHEMA_SKILL_IMPLEMENTATION_CHECK_JS,
+        DESC_SKILL_IMPLEMENTATION_CHECK,
+        INSTRUCTION_IMPLEMENTATION_CHECK,
+    ),
+    (
+        "echo-task",
+        SKILL_ECHO_TASK_JS,
+        SCHEMA_SKILL_ECHO_TASK_JS,
+        DESC_SKILL_ECHO_TASK,
         "",
     ),
     (
         "issue-checkout",
         SKILL_ISSUE_CHECKOUT_JS,
-        SCHEMA_ISSUE_CHECKOUT_JS,
-        DESC_ISSUE_CHECKOUT,
+        SCHEMA_SKILL_ISSUE_CHECKOUT_JS,
+        DESC_SKILL_ISSUE_CHECKOUT,
         INSTRUCTION_ISSUE_CHECKOUT,
     ),
     (
         "pr-create",
         SKILL_PR_CREATE_JS,
-        SCHEMA_PR_CREATE_JS,
-        DESC_PR_CREATE,
+        SCHEMA_SKILL_PR_CREATE_JS,
+        DESC_SKILL_PR_CREATE,
         INSTRUCTION_PR_CREATE,
     ),
-    (
-        "pr-merge",
-        SKILL_PR_MERGE_JS,
-        SCHEMA_PR_MERGE_JS,
-        DESC_PR_MERGE,
-        "",
-    ),
-    (
-        "read-context",
-        SKILL_READ_CONTEXT_JS,
-        SCHEMA_READ_CONTEXT_JS,
-        DESC_READ_CONTEXT,
-        "",
-    ),
 ];
+
+fn lookup_builtin_tool(name: &str) -> Option<(&'static str, &'static str, &'static str)> {
+    BUILTIN_TOOLS
+        .iter()
+        .find(|(n, _, _, _, _)| *n == name)
+        .map(|(_, src, schema, _, instruction)| (*src, *schema, *instruction))
+}
 
 fn lookup_builtin_skill(name: &str) -> Option<(&'static str, &'static str, &'static str)> {
     BUILTIN_SKILLS
@@ -234,9 +255,16 @@ fn lookup_builtin_skill(name: &str) -> Option<(&'static str, &'static str, &'sta
         .map(|(_, src, schema, _, instruction)| (*src, *schema, *instruction))
 }
 
+/// Look up by name in tools first, then skills. Used by host functions
+/// (invokeSkill, schema loader) that can reach either registry.
+fn lookup_builtin_entry(name: &str) -> Option<(&'static str, &'static str, &'static str)> {
+    lookup_builtin_tool(name).or_else(|| lookup_builtin_skill(name))
+}
+
 fn lookup_builtin_description(name: &str) -> Option<&'static str> {
-    BUILTIN_SKILLS
+    BUILTIN_TOOLS
         .iter()
+        .chain(BUILTIN_SKILLS.iter())
         .find(|(n, _, _, _, _)| *n == name)
         .map(|(_, _, _, desc, _)| *desc)
 }
@@ -363,7 +391,7 @@ impl SchemaLoaderHost for SkillState {
     }
 
     fn get_input_schema_json(&mut self, skill_name: String) -> wasmtime::Result<String> {
-        let (source, schema_source, instruction_source) = match lookup_builtin_skill(&skill_name) {
+        let (source, schema_source, instruction_source) = match lookup_builtin_entry(&skill_name) {
             Some(s) => s,
             None => {
                 return Err(anyhow::anyhow!(
@@ -464,7 +492,7 @@ impl InvokeHost for SkillState {
                 stack: None,
             }));
         }
-        let (source, schema_source, instruction_source) = match lookup_builtin_skill(&skill_name) {
+        let (source, schema_source, instruction_source) = match lookup_builtin_entry(&skill_name) {
             Some(s) => s,
             None => {
                 return Ok(Err(SkillError {
@@ -1175,12 +1203,19 @@ fn parse_run_argv(argv: Vec<String>) -> RunArgs {
             if let Some((src, schema, instruction)) = lookup_builtin_skill(&n) {
                 Some(SkillSource::Builtin(src, schema, instruction))
             } else {
-                match skill_dir_for_name(&n) {
-                    Ok(dir) => Some(SkillSource::Path(dir.join("skill.js"))),
+                let dir = match skill_dir_for_name(&n) {
+                    Ok(d) => d,
                     Err(e) => {
                         eprintln!("Error: <skill-name>: {e}");
                         std::process::exit(2);
                     }
+                };
+                let skill_js = dir.join("skill.js");
+                if skill_js.is_file() {
+                    Some(SkillSource::Path(skill_js))
+                } else {
+                    eprintln!("Error: unknown skill: {n}");
+                    std::process::exit(2);
                 }
             }
         }
@@ -1599,8 +1634,8 @@ fn generate_via_api(
     .to_string();
     let r = run_builtin_skill(
         engine,
-        SKILL_GENERATE_SKILL_CODE_JS,
-        SCHEMA_GENERATE_SKILL_CODE_JS,
+        TOOL_GENERATE_SKILL_CODE_JS,
+        SCHEMA_TOOL_GENERATE_SKILL_CODE_JS,
         "",
         &args_json,
         Some(LlmConfig {
