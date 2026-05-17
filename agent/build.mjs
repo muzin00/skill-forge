@@ -16,6 +16,8 @@ const TOOLS = [
   'validate-branch-name',
   'pr-merge',
   'read-context',
+  'export-claude-code-skill',
+  'render-skill-md',
 ];
 
 const SKILLS = [

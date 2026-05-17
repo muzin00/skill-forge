@@ -1,0 +1,1 @@
+Resolve the Claude Code skill discovery path for `forge export`. Given a skill name and the user's HOME directory, returns the absolute path where forge should symlink the canonical export (`<HOME>/.claude/skills/<skillName>`). The host owns symlink creation and conflict policy; this tool only computes the agent-specific destination.
