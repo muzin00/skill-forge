@@ -15,7 +15,7 @@ declare const log: (message: string) => void;
 const LOG_RESULT_MAX = 300;
 
 export interface LoopLlmOpts {
-  context: string;
+  context: string[];
   allowSkills: string[];
   allowCommands?: string[];
   outputSchema: Record<string, unknown>;
@@ -53,11 +53,20 @@ export async function loopLlm<TOutput = Record<string, unknown>>(
   const registry = buildRegistry(opts.allowSkills, commandSpecs);
   const tools = buildTools(opts.allowSkills, commandSpecs, opts.outputSchema);
 
+  if (opts.context.length === 0) {
+    throw 'loop-llm: context must contain at least one entry';
+  }
+
   const client = new Anthropic();
   const messages: Array<{
     role: 'user' | 'assistant';
     content: string | RequestContentBlock[];
-  }> = [{ role: 'user', content: opts.context }];
+  }> = [
+    {
+      role: 'user',
+      content: opts.context.map((text) => ({ type: 'text', text })),
+    },
+  ];
 
   for (let iteration = 0; iteration < maxIterations; iteration++) {
     const response = await callMessages(

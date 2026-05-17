@@ -6,8 +6,11 @@ defineSchema({
       description: 'System message: instructions for the LLM',
     },
     context: {
-      type: 'string',
-      description: 'User message: the material to work with',
+      type: 'array',
+      items: { type: 'string' },
+      minItems: 1,
+      description:
+        'User message: array of text blocks, each becomes a separate text content block in a single user message',
     },
     allowSkills: {
       type: 'array',
