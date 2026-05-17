@@ -2,7 +2,7 @@ use std::env;
 use std::fs;
 use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -10,6 +10,7 @@ use wasmtime::component::{Component, Linker, ResourceTable, bindgen};
 use wasmtime::{Config, Engine, Store};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiView};
 
+mod export;
 mod generated_args;
 mod generated_schema;
 mod mcp;
@@ -54,6 +55,10 @@ const TOOL_VALIDATE_BRANCH_NAME_JS: &str =
     include_str!("../agent/dist/tools/validate-branch-name/tool.js");
 const TOOL_PR_MERGE_JS: &str = include_str!("../agent/dist/tools/pr-merge/tool.js");
 const TOOL_READ_CONTEXT_JS: &str = include_str!("../agent/dist/tools/read-context/tool.js");
+const TOOL_EXPORT_CLAUDE_CODE_SKILL_JS: &str =
+    include_str!("../agent/dist/tools/export-claude-code-skill/tool.js");
+const TOOL_RENDER_SKILL_MD_JS: &str =
+    include_str!("../agent/dist/tools/render-skill-md/tool.js");
 
 const SCHEMA_TOOL_CALL_LLM_JS: &str = include_str!("../agent/dist/tools/call-llm/schema.js");
 const SCHEMA_TOOL_GENERATE_SKILL_CODE_JS: &str =
@@ -72,6 +77,10 @@ const SCHEMA_TOOL_VALIDATE_BRANCH_NAME_JS: &str =
 const SCHEMA_TOOL_PR_MERGE_JS: &str = include_str!("../agent/dist/tools/pr-merge/schema.js");
 const SCHEMA_TOOL_READ_CONTEXT_JS: &str =
     include_str!("../agent/dist/tools/read-context/schema.js");
+const SCHEMA_TOOL_EXPORT_CLAUDE_CODE_SKILL_JS: &str =
+    include_str!("../agent/dist/tools/export-claude-code-skill/schema.js");
+const SCHEMA_TOOL_RENDER_SKILL_MD_JS: &str =
+    include_str!("../agent/dist/tools/render-skill-md/schema.js");
 
 const DESC_TOOL_CALL_LLM: &str = include_str!("../agent/src/tools/call-llm/DESCRIPTION.md");
 const DESC_TOOL_GENERATE_SKILL_CODE: &str =
@@ -90,6 +99,10 @@ const DESC_TOOL_VALIDATE_BRANCH_NAME: &str =
 const DESC_TOOL_PR_MERGE: &str = include_str!("../agent/src/tools/pr-merge/DESCRIPTION.md");
 const DESC_TOOL_READ_CONTEXT: &str =
     include_str!("../agent/src/tools/read-context/DESCRIPTION.md");
+const DESC_TOOL_EXPORT_CLAUDE_CODE_SKILL: &str =
+    include_str!("../agent/src/tools/export-claude-code-skill/DESCRIPTION.md");
+const DESC_TOOL_RENDER_SKILL_MD: &str =
+    include_str!("../agent/src/tools/render-skill-md/DESCRIPTION.md");
 
 // Skill sources (LLM-loop entries).
 const SKILL_IMPLEMENTATION_CHECK_JS: &str =
@@ -208,6 +221,20 @@ const BUILTIN_TOOLS: &[(&str, &str, &str, &str, &str)] = &[
         DESC_TOOL_READ_CONTEXT,
         "",
     ),
+    (
+        "export-claude-code-skill",
+        TOOL_EXPORT_CLAUDE_CODE_SKILL_JS,
+        SCHEMA_TOOL_EXPORT_CLAUDE_CODE_SKILL_JS,
+        DESC_TOOL_EXPORT_CLAUDE_CODE_SKILL,
+        "",
+    ),
+    (
+        "render-skill-md",
+        TOOL_RENDER_SKILL_MD_JS,
+        SCHEMA_TOOL_RENDER_SKILL_MD_JS,
+        DESC_TOOL_RENDER_SKILL_MD,
+        "",
+    ),
 ];
 
 const BUILTIN_SKILLS: &[(&str, &str, &str, &str, &str)] = &[
@@ -316,6 +343,17 @@ enum Command {
         mode: McpMode,
     },
     List,
+    Export {
+        #[arg(
+            long,
+            value_delimiter = ',',
+            default_value = "claude-code",
+            help = "Comma-separated target names (default: claude-code)"
+        )]
+        target: Vec<String>,
+        #[arg(long, default_value_t = false)]
+        force: bool,
+    },
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug, ValueEnum)]
@@ -400,37 +438,19 @@ impl SchemaLoaderHost for SkillState {
                 ));
             }
         };
-        let engine = self.engine.clone();
-        let component = self.component.clone();
-        let llm_config = self.llm_config.clone();
-        let linker = build_linker(&engine)
-            .map_err(|e| anyhow::anyhow!("failed to build linker for schema lookup: {e}"))?;
-        let next_depth = self.depth + 1;
-        let verbose = self.verbose;
-        let (mut store, runtime) = instantiate(
-            &engine,
-            &component,
-            &linker,
+        let envelope = load_skill_schema_envelope(
+            &self.engine,
+            &self.component,
+            &skill_name,
             source.to_string(),
             schema_source.to_string(),
             instruction_source.to_string(),
             Profile::Builtin,
-            llm_config,
-            next_depth,
-            verbose,
+            self.llm_config.clone(),
+            self.depth + 1,
+            self.verbose,
         )
-        .map_err(|e| anyhow::anyhow!("failed to instantiate skill for schema lookup: {e}"))?;
-        let envelope_json = match runtime.call_get_schema(&mut store)? {
-            Ok(json) => json,
-            Err(err) => {
-                return Err(anyhow::anyhow!(
-                    "get_schema failed for {}: {}",
-                    skill_name,
-                    err.message
-                ));
-            }
-        };
-        let envelope = parse_schema_envelope(&envelope_json)?;
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
         let json = serde_json::to_string(&envelope.input)
             .map_err(|e| anyhow::anyhow!("failed to serialize input schema: {e}"))?;
         Ok(json)
@@ -698,6 +718,7 @@ fn main() -> Result<()> {
         }
         Command::McpServer { mode } => mcp::run(mode, &engine),
         Command::List => run_list(),
+        Command::Export { target, force } => run_export(&engine, target, force),
     }
 }
 
@@ -808,6 +829,509 @@ fn collect_user_skill_names() -> Result<Vec<String>> {
         }
     }
     Ok(names)
+}
+
+/// Source of a skill entry being exported. Builtin entries live in the binary
+/// (`BUILTIN_SKILLS`); user entries live under `~/.skill-forge/skills/<name>/`.
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+pub(crate) enum ExportSkillKind {
+    Builtin,
+    User,
+}
+
+fn exports_root() -> Result<PathBuf> {
+    let home = dirs::home_dir().context("failed to determine home directory")?;
+    Ok(home.join(".skill-forge").join("exports"))
+}
+
+fn manifest_path() -> Result<PathBuf> {
+    Ok(exports_root()?.join(".manifest.json"))
+}
+
+fn validate_target_name(name: &str) -> std::result::Result<(), String> {
+    if name.is_empty() {
+        return Err("target name must not be empty".into());
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(format!(
+            "target name '{name}' must be ASCII alphanumeric, '-' or '_'"
+        ));
+    }
+    Ok(())
+}
+
+/// Collect every skill that `forge export` should process, merging builtin
+/// (compiled-in) skills with user skills under `~/.skill-forge/skills/`.
+///
+/// Errors out on builtin × user name collision, matching the spec in #158:
+/// `forge run` lookup remains builtin-priority but export surfaces collisions
+/// loudly so the silent shadowing is not propagated to the symlinks.
+fn collect_export_set() -> Result<Vec<(String, ExportSkillKind)>> {
+    use std::collections::BTreeMap;
+
+    let mut entries: BTreeMap<String, ExportSkillKind> = BTreeMap::new();
+    for (name, _, _, _, _) in BUILTIN_SKILLS {
+        entries.insert((*name).to_string(), ExportSkillKind::Builtin);
+    }
+
+    let mut collisions: Vec<String> = Vec::new();
+    for name in collect_user_skill_names()? {
+        if entries.contains_key(&name) {
+            collisions.push(name);
+        } else {
+            entries.insert(name, ExportSkillKind::User);
+        }
+    }
+
+    if !collisions.is_empty() {
+        anyhow::bail!(
+            "skill name collision between builtin and user: {}\n\
+             rename your user skill(s) under ~/.skill-forge/skills/ to resolve",
+            collisions.join(", ")
+        );
+    }
+
+    Ok(entries.into_iter().collect())
+}
+
+fn run_export(engine: &Engine, target: Vec<String>, force: bool) -> Result<()> {
+    let targets: Vec<String> = target.into_iter().map(|t| t.trim().to_string()).collect();
+    if targets.is_empty() {
+        anyhow::bail!("--target: at least one target name required");
+    }
+    for t in &targets {
+        if let Err(msg) = validate_target_name(t) {
+            anyhow::bail!("--target: {msg}");
+        }
+    }
+
+    let skills = collect_export_set()?;
+    let root = exports_root()?;
+    let component = deserialize_runtime_component(engine)?;
+    let home = dirs::home_dir().context("failed to determine home directory")?;
+
+    fs::create_dir_all(&root)
+        .with_context(|| format!("failed to create exports root: {}", root.display()))?;
+
+    let manifest_p = manifest_path()?;
+    let prior_manifest = read_prior_manifest(&manifest_p)?;
+
+    eprintln!("forge export → {}", root.display());
+    eprintln!("  targets: {}", targets.join(", "));
+
+    for (name, kind) in &skills {
+        write_canonical_for_skill(engine, &component, &root, name, *kind)?;
+        eprintln!("  exported skill: {name}");
+    }
+
+    let mut placements: Vec<export::ManifestPlacement> = Vec::new();
+    for target in &targets {
+        let tool_name = format!("export-{target}-skill");
+        if lookup_builtin_tool(&tool_name).is_none() {
+            anyhow::bail!(
+                "no builtin tool '{tool_name}' for target '{target}'; \
+                 add agent/src/tools/{tool_name}/ to support this target"
+            );
+        }
+        for (skill_name, _) in &skills {
+            let dest = resolve_target_destination(
+                engine,
+                &component,
+                &tool_name,
+                skill_name,
+                &home,
+            )?;
+            let canonical = root.join(skill_name);
+            place_symlink(&canonical, &dest, &root, force)?;
+            placements.push(export::ManifestPlacement {
+                target: target.clone(),
+                name: skill_name.clone(),
+                dest,
+            });
+        }
+    }
+
+    reconcile_orphans(&prior_manifest, &placements, &skills, &root, &targets)?;
+
+    let manifest = export::ExportManifest {
+        skills: skills.iter().map(|(n, _)| n.clone()).collect(),
+        placements,
+    };
+    let manifest_json = serde_json::to_string_pretty(&manifest.to_json())
+        .context("failed to serialize export manifest")?;
+    fs::write(&manifest_p, manifest_json + "\n")
+        .with_context(|| format!("failed to write manifest: {}", manifest_p.display()))?;
+    eprintln!("  wrote manifest: {}", manifest_p.display());
+
+    Ok(())
+}
+
+/// Read the prior `.manifest.json` if it exists. Returns `None` for first-time
+/// runs (no file). Errors out on unknown/malformed manifest so users notice and
+/// can clear it manually rather than getting silent half-states.
+fn read_prior_manifest(path: &Path) -> Result<Option<export::ExportManifest>> {
+    match fs::read_to_string(path) {
+        Ok(s) => Ok(Some(
+            export::ExportManifest::from_json_str(&s).map_err(|e| anyhow::anyhow!("{e}"))?,
+        )),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(anyhow::Error::from(e))
+            .with_context(|| format!("failed to read manifest: {}", path.display())),
+    }
+}
+
+/// Remove forge-owned artifacts (symlinks + canonical export dirs) that the
+/// prior manifest knew about but the current run no longer covers.
+///
+/// Two distinct "orphan" sources:
+///
+/// 1. Prior placements whose `(target, name)` is not in the new placement set
+///    — e.g. user deleted a user skill, or invoked `--target` with a smaller
+///    subset of targets than last time. These have their forge-owned symlink
+///    removed (real dirs / foreign symlinks are left untouched as a safety
+///    net).
+/// 2. Skills present in the prior manifest's `skills` field but absent from
+///    the current `collect_export_set()` — their canonical `exports/<name>/`
+///    dir is removed so stale SKILL.md/DESCRIPTION.md don't linger.
+fn reconcile_orphans(
+    prior: &Option<export::ExportManifest>,
+    new_placements: &[export::ManifestPlacement],
+    new_skills: &[(String, ExportSkillKind)],
+    exports_root: &Path,
+    active_targets: &[String],
+) -> Result<()> {
+    let Some(prior) = prior.as_ref() else {
+        return Ok(());
+    };
+
+    let new_keys: std::collections::HashSet<(String, String)> = new_placements
+        .iter()
+        .map(|p| (p.target.clone(), p.name.clone()))
+        .collect();
+    let active_target_set: std::collections::HashSet<&str> =
+        active_targets.iter().map(String::as_str).collect();
+
+    for prior_p in &prior.placements {
+        let key = (prior_p.target.clone(), prior_p.name.clone());
+        if new_keys.contains(&key) {
+            continue;
+        }
+        // Only touch this placement if the user actually asked us to manage
+        // its target this run — otherwise leave it alone (the user can clean
+        // it up by re-running with the missing target included).
+        if !active_target_set.contains(prior_p.target.as_str()) {
+            continue;
+        }
+        remove_forge_owned_symlink(&prior_p.dest, exports_root)?;
+    }
+
+    let new_skill_names: std::collections::HashSet<&str> =
+        new_skills.iter().map(|(n, _)| n.as_str()).collect();
+    for stale_name in prior.skills.iter() {
+        if new_skill_names.contains(stale_name.as_str()) {
+            continue;
+        }
+        let stale_dir = exports_root.join(stale_name);
+        match fs::symlink_metadata(&stale_dir) {
+            Ok(meta) if meta.is_dir() => {
+                fs::remove_dir_all(&stale_dir).with_context(|| {
+                    format!("failed to remove stale export dir: {}", stale_dir.display())
+                })?;
+                eprintln!("  reconciled: removed exports/{stale_name}/");
+            }
+            Ok(_) => {} // not a dir — leave alone
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(anyhow::Error::from(e)).with_context(|| {
+                    format!("failed to stat stale export dir: {}", stale_dir.display())
+                });
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn remove_forge_owned_symlink(dest: &Path, exports_root: &Path) -> Result<()> {
+    #[cfg(not(unix))]
+    {
+        let _ = (dest, exports_root);
+        return Ok(());
+    }
+    #[cfg(unix)]
+    {
+        match fs::symlink_metadata(dest) {
+            Ok(meta) => {
+                if !meta.file_type().is_symlink() {
+                    return Ok(());
+                }
+                if !is_forge_owned_symlink(dest, exports_root) {
+                    return Ok(());
+                }
+                fs::remove_file(dest).with_context(|| {
+                    format!("failed to remove orphan symlink: {}", dest.display())
+                })?;
+                eprintln!("  reconciled: removed {}", dest.display());
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(anyhow::Error::from(e))
+                    .with_context(|| format!("failed to stat orphan: {}", dest.display()));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn resolve_target_destination(
+    engine: &Engine,
+    component: &Component,
+    tool_name: &str,
+    skill_name: &str,
+    home: &Path,
+) -> Result<PathBuf> {
+    let input = serde_json::json!({
+        "skillName": skill_name,
+        "homeDir": home.to_string_lossy(),
+    });
+    let output_json = invoke_builtin_tool_run(engine, component, tool_name, &input.to_string())?;
+    let v: serde_json::Value = serde_json::from_str(&output_json)
+        .with_context(|| format!("tool '{tool_name}' returned non-JSON output: {output_json}"))?;
+    let dest = v
+        .get("destPath")
+        .and_then(|d| d.as_str())
+        .ok_or_else(|| anyhow::anyhow!("tool '{tool_name}' output missing 'destPath' string"))?;
+    Ok(PathBuf::from(dest))
+}
+
+fn invoke_builtin_tool_run(
+    engine: &Engine,
+    component: &Component,
+    name: &str,
+    input_json: &str,
+) -> Result<String> {
+    let (src, schema, instr) = lookup_builtin_tool(name)
+        .ok_or_else(|| anyhow::anyhow!("builtin tool '{name}' not found"))?;
+    let linker = build_linker(engine)
+        .with_context(|| format!("failed to build linker to invoke '{name}'"))?;
+    let (mut store, runtime) = instantiate(
+        engine,
+        component,
+        &linker,
+        src.to_string(),
+        schema.to_string(),
+        instr.to_string(),
+        Profile::Builtin,
+        None,
+        0,
+        false,
+    )
+    .with_context(|| format!("failed to instantiate '{name}'"))?;
+    match runtime.call_run(&mut store, input_json, None)? {
+        Ok(json) => Ok(json),
+        Err(err) => anyhow::bail!("tool '{name}' failed: {}", err.message),
+    }
+}
+
+/// Place a symlink at `dest` pointing at `canonical`. Existing entries are
+/// handled per the conflict policy:
+/// - forge-owned symlink (resolves into `exports_root`) → re-pointed silently
+/// - real dir / file / foreign symlink → error unless `force`; with `force`
+///   the existing entry is renamed to `<dest>.bak.<unix-nanos>` before the
+///   new symlink is installed.
+fn place_symlink(
+    canonical: &Path,
+    dest: &Path,
+    exports_root: &Path,
+    force: bool,
+) -> Result<()> {
+    #[cfg(not(unix))]
+    {
+        let _ = (canonical, dest, exports_root, force);
+        anyhow::bail!("`forge export` symlink placement is not supported on this platform");
+    }
+
+    #[cfg(unix)]
+    {
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent).with_context(|| {
+                format!("failed to create symlink parent: {}", parent.display())
+            })?;
+        }
+
+        match fs::symlink_metadata(dest) {
+            Ok(meta) => {
+                let file_type = meta.file_type();
+                if file_type.is_symlink() && is_forge_owned_symlink(dest, exports_root) {
+                    fs::remove_file(dest).with_context(|| {
+                        format!("failed to remove old forge symlink: {}", dest.display())
+                    })?;
+                } else if force {
+                    backup_existing(dest)?;
+                } else {
+                    anyhow::bail!(
+                        "{} already exists and is not a forge-owned symlink; \
+                         rerun with --force to back it up to <name>.bak.<ts>",
+                        dest.display()
+                    );
+                }
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(anyhow::Error::from(e))
+                    .with_context(|| format!("failed to stat {}", dest.display()));
+            }
+        }
+
+        std::os::unix::fs::symlink(canonical, dest).with_context(|| {
+            format!(
+                "failed to symlink {} -> {}",
+                dest.display(),
+                canonical.display()
+            )
+        })?;
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+fn is_forge_owned_symlink(dest: &Path, exports_root: &Path) -> bool {
+    let Ok(link_target) = fs::read_link(dest) else {
+        return false;
+    };
+    let resolved = if link_target.is_absolute() {
+        link_target.clone()
+    } else if let Some(parent) = dest.parent() {
+        parent.join(&link_target)
+    } else {
+        link_target.clone()
+    };
+    let canon_resolved = fs::canonicalize(&resolved).ok();
+    let canon_root = fs::canonicalize(exports_root).ok();
+    match (canon_resolved, canon_root) {
+        (Some(r), Some(root)) => r.starts_with(&root),
+        _ => false,
+    }
+}
+
+#[cfg(unix)]
+fn backup_existing(dest: &Path) -> Result<()> {
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let bak_name = format!(
+        "{}.bak.{ts}",
+        dest.file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "skill".to_string())
+    );
+    let bak_path = dest
+        .parent()
+        .map(|p| p.join(&bak_name))
+        .unwrap_or_else(|| PathBuf::from(&bak_name));
+    fs::rename(dest, &bak_path).with_context(|| {
+        format!(
+            "failed to back up {} -> {}",
+            dest.display(),
+            bak_path.display()
+        )
+    })?;
+    eprintln!("  backed up existing {} → {}", dest.display(), bak_path.display());
+    Ok(())
+}
+
+/// Render and persist `~/.skill-forge/exports/<name>/SKILL.md` and
+/// `DESCRIPTION.md` for one skill. Overwrites unconditionally — exports/ is
+/// owned by forge so no `--force` is needed here.
+///
+/// The rendering logic itself lives in the `render-skill-md` builtin tool
+/// (TypeScript). The host gathers the skill's metadata + schema envelope,
+/// invokes the tool, and writes the returned strings to disk.
+fn write_canonical_for_skill(
+    engine: &Engine,
+    component: &Component,
+    exports_root: &Path,
+    name: &str,
+    kind: ExportSkillKind,
+) -> Result<()> {
+    let description = read_skill_description(name, kind)?;
+    let (src, schema_src, instr_src, profile) = load_export_skill_artifacts(name, kind)?;
+    let envelope = load_skill_schema_envelope(
+        engine,
+        component,
+        name,
+        src,
+        schema_src,
+        instr_src,
+        profile,
+        None, // schema fetch does not require an LLM
+        0,
+        false,
+    )?;
+    let positional_prop = infer_positional_prop(envelope.args.as_ref());
+
+    let mut input = serde_json::Map::new();
+    input.insert("name".into(), serde_json::Value::String(name.to_string()));
+    input.insert(
+        "description".into(),
+        serde_json::Value::String(description.clone()),
+    );
+    input.insert("inputSchema".into(), envelope.input.clone());
+    if let Some(out_schema) = envelope.output.as_ref() {
+        input.insert("outputSchema".into(), out_schema.clone());
+    }
+    if let Some(prop) = positional_prop.as_deref() {
+        input.insert(
+            "positionalProp".into(),
+            serde_json::Value::String(prop.to_string()),
+        );
+    }
+    let input_json = serde_json::Value::Object(input).to_string();
+
+    let output_json =
+        invoke_builtin_tool_run(engine, component, "render-skill-md", &input_json)?;
+    let v: serde_json::Value = serde_json::from_str(&output_json).with_context(|| {
+        format!("render-skill-md returned non-JSON output for {name}: {output_json}")
+    })?;
+    let skill_md = v
+        .get("skillMd")
+        .and_then(|x| x.as_str())
+        .ok_or_else(|| anyhow::anyhow!("render-skill-md output missing 'skillMd' for {name}"))?
+        .to_string();
+    let description_md = v
+        .get("descriptionMd")
+        .and_then(|x| x.as_str())
+        .ok_or_else(|| {
+            anyhow::anyhow!("render-skill-md output missing 'descriptionMd' for {name}")
+        })?
+        .to_string();
+
+    let skill_dir = exports_root.join(name);
+    fs::create_dir_all(&skill_dir)
+        .with_context(|| format!("failed to create export dir: {}", skill_dir.display()))?;
+    fs::write(skill_dir.join("SKILL.md"), skill_md)
+        .with_context(|| format!("failed to write SKILL.md for {name}"))?;
+    fs::write(skill_dir.join("DESCRIPTION.md"), description_md)
+        .with_context(|| format!("failed to write DESCRIPTION.md for {name}"))?;
+    Ok(())
+}
+
+fn read_skill_description(name: &str, kind: ExportSkillKind) -> Result<String> {
+    match kind {
+        ExportSkillKind::Builtin => Ok(lookup_builtin_description(name)
+            .ok_or_else(|| anyhow::anyhow!("builtin skill not found: {name}"))?
+            .to_string()),
+        ExportSkillKind::User => {
+            let dir = skill_dir_for_name(name)?;
+            let path = dir.join("DESCRIPTION.md");
+            fs::read_to_string(&path)
+                .with_context(|| format!("failed to read user DESCRIPTION.md: {}", path.display()))
+        }
+    }
 }
 
 fn resolve_backend(flag: Option<Backend>) -> Backend {
@@ -980,11 +1504,7 @@ fn run_skill_run(engine: &Engine, raw_argv: Vec<String>) -> Result<()> {
             std::process::exit(1);
         }
     }
-    let positional_prop = args_spec
-        .as_ref()
-        .and_then(|a| a.get("positional"))
-        .and_then(|p| p.as_str())
-        .map(|s| s.to_string());
+    let positional_prop = infer_positional_prop(args_spec.as_ref());
 
     let args_json = build_input_args_json(&input_schema, positional_prop.as_deref(), &skill_flag_argv)?;
     let context = read_stdin_context()?;
@@ -1048,6 +1568,99 @@ fn parse_schema_envelope(schema_json: &str) -> Result<SchemaEnvelope> {
         output,
         args,
     })
+}
+
+/// Read the `positional` property name from a generated-args spec, if present.
+/// Single shared implementation used by `run_skill_run`, the `--help` formatter,
+/// and `forge export` so the example invocations stay in sync.
+fn infer_positional_prop(args_spec: Option<&serde_json::Value>) -> Option<String> {
+    args_spec
+        .and_then(|a| a.get("positional"))
+        .and_then(|p| p.as_str())
+        .map(|s| s.to_string())
+}
+
+/// Instantiate a fresh skill instance, call its `get_schema`, and parse the envelope.
+/// Used by the `SchemaLoaderHost::get_input_schema_json` host fn and by `forge export`.
+#[allow(clippy::too_many_arguments)]
+fn load_skill_schema_envelope(
+    engine: &Engine,
+    component: &Component,
+    skill_name: &str,
+    skill_source: String,
+    schema_source: String,
+    instruction_source: String,
+    profile: Profile,
+    llm_config: Option<LlmConfig>,
+    depth: usize,
+    verbose: bool,
+) -> Result<SchemaEnvelope> {
+    let linker = build_linker(engine)
+        .with_context(|| format!("failed to build linker for schema lookup of {skill_name}"))?;
+    let (mut store, runtime) = instantiate(
+        engine,
+        component,
+        &linker,
+        skill_source,
+        schema_source,
+        instruction_source,
+        profile,
+        llm_config,
+        depth,
+        verbose,
+    )
+    .with_context(|| format!("failed to instantiate skill for schema lookup of {skill_name}"))?;
+    let envelope_json = match runtime.call_get_schema(&mut store)? {
+        Ok(json) => json,
+        Err(err) => {
+            anyhow::bail!("get_schema failed for {skill_name}: {}", err.message);
+        }
+    };
+    parse_schema_envelope(&envelope_json)
+}
+
+/// Resolve a skill (builtin or user) to its (source, schema, instruction, profile)
+/// artifacts so the wasm runtime can be instantiated for it.
+#[allow(dead_code)] // wired in Phase 4
+fn load_export_skill_artifacts(
+    name: &str,
+    kind: ExportSkillKind,
+) -> Result<(String, String, String, Profile)> {
+    match kind {
+        ExportSkillKind::Builtin => {
+            let (src, schema, instr) = lookup_builtin_skill(name)
+                .ok_or_else(|| anyhow::anyhow!("builtin skill not found: {name}"))?;
+            Ok((
+                src.to_string(),
+                schema.to_string(),
+                instr.to_string(),
+                Profile::Builtin,
+            ))
+        }
+        ExportSkillKind::User => {
+            let dir = skill_dir_for_name(name)?;
+            let skill_path = dir.join("skill.js");
+            let source = fs::read_to_string(&skill_path).with_context(|| {
+                format!("failed to read user skill source: {}", skill_path.display())
+            })?;
+            let schema_path = schema_path_for(&skill_path);
+            let schema_source = fs::read_to_string(&schema_path).with_context(|| {
+                format!("failed to read user schema source: {}", schema_path.display())
+            })?;
+            let instruction_path = instruction_path_for(&skill_path);
+            let instruction_source = match fs::read_to_string(&instruction_path) {
+                Ok(s) => s,
+                Err(e) if e.kind() == io::ErrorKind::NotFound => String::new(),
+                Err(e) => {
+                    return Err(anyhow::anyhow!(
+                        "failed to read user instruction source: {}: {e}",
+                        instruction_path.display()
+                    ));
+                }
+            };
+            Ok((source, schema_source, instruction_source, Profile::User))
+        }
+    }
 }
 
 fn build_input_args_json(
@@ -2020,6 +2633,90 @@ mod tests {
             err.to_string().contains("bogus") || err.to_string().contains("invalid"),
             "expected error to mention invalid value; got: {err}"
         );
+    }
+
+    #[test]
+    fn export_defaults_to_claude_code() {
+        let parsed = Args::try_parse_from(["forge", "export"]).unwrap();
+        match parsed.command {
+            Command::Export { target, force } => {
+                assert_eq!(target, vec!["claude-code".to_string()]);
+                assert!(!force);
+            }
+            other => panic!("expected Export command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn export_accepts_multiple_targets_comma_separated() {
+        let parsed =
+            Args::try_parse_from(["forge", "export", "--target", "claude-code,cursor"]).unwrap();
+        match parsed.command {
+            Command::Export { target, force } => {
+                assert_eq!(
+                    target,
+                    vec!["claude-code".to_string(), "cursor".to_string()]
+                );
+                assert!(!force);
+            }
+            other => panic!("expected Export command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn export_force_flag() {
+        let parsed = Args::try_parse_from(["forge", "export", "--force"]).unwrap();
+        match parsed.command {
+            Command::Export { force, .. } => assert!(force),
+            other => panic!("expected Export command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_target_name_accepts_alnum_dash_underscore() {
+        assert!(validate_target_name("claude-code").is_ok());
+        assert!(validate_target_name("cursor").is_ok());
+        assert!(validate_target_name("ai_agent_42").is_ok());
+    }
+
+    #[test]
+    fn validate_target_name_rejects_invalid() {
+        assert!(validate_target_name("").is_err());
+        assert!(validate_target_name("a/b").is_err());
+        assert!(validate_target_name("a b").is_err());
+        assert!(validate_target_name("a.b").is_err());
+    }
+
+    #[test]
+    fn infer_positional_prop_returns_name_when_present() {
+        let spec = json!({ "positional": "issueNumber" });
+        assert_eq!(
+            infer_positional_prop(Some(&spec)),
+            Some("issueNumber".to_string())
+        );
+    }
+
+    #[test]
+    fn infer_positional_prop_none_when_missing() {
+        assert_eq!(infer_positional_prop(None), None);
+        let empty = json!({});
+        assert_eq!(infer_positional_prop(Some(&empty)), None);
+        let wrong_type = json!({ "positional": 42 });
+        assert_eq!(infer_positional_prop(Some(&wrong_type)), None);
+    }
+
+    #[test]
+    fn collect_export_set_includes_all_builtin_skills() {
+        let set = collect_export_set().expect("collect_export_set should succeed");
+        let names: Vec<&str> = set.iter().map(|(n, _)| n.as_str()).collect();
+        for (name, _, _, _, _) in BUILTIN_SKILLS {
+            assert!(names.contains(name), "missing builtin {name} in export set");
+        }
+        for (_, kind) in &set {
+            if matches!(kind, ExportSkillKind::Builtin) {
+                continue;
+            }
+        }
     }
 
     #[test]
