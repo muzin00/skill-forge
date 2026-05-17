@@ -16,32 +16,6 @@ pub fn build_args_json(
     Ok(value.to_string())
 }
 
-pub fn build_args_json_with_stdin(
-    schema: &Value,
-    positional_prop: Option<&str>,
-    argv: &[String],
-    stdin: &Value,
-) -> Result<String, String> {
-    let argv_overrides = parse_argv_to_partial(schema, positional_prop, argv)?;
-    let mut map = match stdin {
-        Value::Object(o) => o.clone(),
-        Value::Null => Map::new(),
-        _ => {
-            return Err(format!(
-                "Error: stdin: expected JSON object, got {}",
-                format_value(stdin)
-            ));
-        }
-    };
-    for (k, v) in argv_overrides {
-        map.insert(k, v);
-    }
-    apply_boolean_defaults(&mut map, schema);
-    let value = Value::Object(map);
-    validator::validate_input(&value, schema, positional_prop)?;
-    Ok(value.to_string())
-}
-
 fn parse_argv_to_partial(
     schema: &Value,
     positional_prop: Option<&str>,
@@ -501,96 +475,6 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err, "Error: --count: expected integer, got \"abc\"");
-    }
-
-    #[test]
-    fn stdin_provides_required_field_no_cli_flag() {
-        let schema = json!({
-            "type": "object",
-            "properties": {
-                "userName": { "type": "string" },
-                "count": { "type": "integer" }
-            },
-            "required": ["userName", "count"],
-            "additionalProperties": false
-        });
-        let stdin = json!({ "userName": "alice", "count": 7 });
-        let json_str = build_args_json_with_stdin(&schema, None, &[], &stdin).unwrap();
-        let v: Value = serde_json::from_str(&json_str).unwrap();
-        assert_eq!(v, json!({ "userName": "alice", "count": 7 }));
-    }
-
-    #[test]
-    fn stdin_overridden_by_cli_flag() {
-        let schema = json!({
-            "type": "object",
-            "properties": {
-                "userName": { "type": "string" },
-                "count": { "type": "integer" }
-            },
-            "required": ["userName", "count"]
-        });
-        let stdin = json!({ "userName": "alice", "count": 7 });
-        let argv = vec![s("--user-name"), s("bob")];
-        let json_str = build_args_json_with_stdin(&schema, None, &argv, &stdin).unwrap();
-        let v: Value = serde_json::from_str(&json_str).unwrap();
-        assert_eq!(v, json!({ "userName": "bob", "count": 7 }));
-    }
-
-    #[test]
-    fn stdin_violates_input_schema_type() {
-        let schema = json!({
-            "type": "object",
-            "properties": {
-                "count": { "type": "integer" }
-            },
-            "required": ["count"]
-        });
-        let stdin = json!({ "count": "not-a-number" });
-        let err = build_args_json_with_stdin(&schema, None, &[], &stdin).unwrap_err();
-        assert_eq!(
-            err,
-            "Error: --count: expected integer, got \"not-a-number\""
-        );
-    }
-
-    #[test]
-    fn stdin_missing_required_after_merge() {
-        let schema = json!({
-            "type": "object",
-            "properties": {
-                "userName": { "type": "string" },
-                "count": { "type": "integer" }
-            },
-            "required": ["userName", "count"]
-        });
-        let stdin = json!({ "userName": "alice" });
-        let err = build_args_json_with_stdin(&schema, None, &[], &stdin).unwrap_err();
-        assert_eq!(err, "Error: --count: required");
-    }
-
-    #[test]
-    fn stdin_empty_object_uses_cli_flags_only() {
-        let schema = json!({
-            "type": "object",
-            "properties": {
-                "userName": { "type": "string" }
-            },
-            "required": ["userName"]
-        });
-        let stdin = json!({});
-        let argv = vec![s("--user-name"), s("alice")];
-        let json_str = build_args_json_with_stdin(&schema, None, &argv, &stdin).unwrap();
-        let v: Value = serde_json::from_str(&json_str).unwrap();
-        assert_eq!(v, json!({ "userName": "alice" }));
-    }
-
-    #[test]
-    fn stdin_non_object_rejected() {
-        let schema = json!({ "type": "object", "properties": {} });
-        let stdin = json!([1, 2, 3]);
-        let err = build_args_json_with_stdin(&schema, None, &[], &stdin).unwrap_err();
-        assert_eq!(err, "Error: stdin: expected JSON object, got [1, 2, 3]");
     }
 
     fn positional_files_schema() -> Value {
